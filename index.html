@@ -2640,10 +2640,35 @@ setupPeerEvents();
 
     })
     .catch(e => {
-        document.getElementById("statusKoneksi").className = "status status-merah";
-        document.getElementById("statusKoneksi").innerHTML = "❌ <b>Izin Ditolak:</b> Izinkan mikrofon agar bisa bicara!";
-        toast("❌ Izin mikrofon WAJIB diberikan agar bisa berbicara!", "merah");
-    });
+    console.error("=== GAGAL MASUK CHANNEL ===");
+    console.error("Nama error:", e?.name);
+    console.error("Pesan:", e?.message);
+    console.error("Error lengkap:", e);
+    console.error("Stack:", e?.stack);
+
+    document.getElementById("statusKoneksi").className =
+        "status status-merah";
+
+    if (
+        e?.name === "NotAllowedError" ||
+        e?.name === "PermissionDeniedError"
+    ) {
+        document.getElementById("statusKoneksi").innerHTML =
+            "❌ <b>Izin Mikrofon Ditolak</b> — Izinkan mikrofon di browser.";
+    }
+    else if (e?.name === "NotFoundError") {
+        document.getElementById("statusKoneksi").innerHTML =
+            "❌ <b>Mikrofon Tidak Ditemukan</b>";
+    }
+    else if (e?.name === "NotReadableError") {
+        document.getElementById("statusKoneksi").innerHTML =
+            "❌ <b>Mikrofon Tidak Bisa Digunakan</b> — mungkin sedang dipakai aplikasi lain.";
+    }
+    else {
+        document.getElementById("statusKoneksi").innerHTML =
+            `❌ <b>Error aplikasi:</b> ${e?.name || "Error"} — ${e?.message || "Tidak diketahui"}`;
+    }
+});
 }
 
 function mulaiCariUlang() {
