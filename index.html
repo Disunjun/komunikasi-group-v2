@@ -2027,7 +2027,7 @@ function initRealtimeSocket() {
     socket.on("presence:update", sessions => { serverSessions = sessions || {}; refreshMonitoring(); });
     socket.on("room:error", e => toast("❌ " + (e?.message || "Gagal masuk room"), "merah", 6000));
     socket.on("admin:kick", () => { toast("Anda telah di-kick oleh admin!", "merah", 5000); keluarChannel(); });
-    socket.on("floor:event", handleRealtimeFloorEvent);
+    socket.on("floor:event", receiveFloorState);
     return true;
 }
 function joinRealtimeRoom() {
