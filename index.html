@@ -865,6 +865,12 @@ let peerReconnectAttempts = 0;
 const MAX_RECONNECT_ATTEMPTS = 5;
 let peerReconnectTimer = null;
 
+// Peer-to-peer connection lifecycle state.
+// Mencegah koneksi ganda dan memungkinkan retry jika DataConnection macet/gagal.
+const peerConnecting = new Set();
+const peerConnectTimers = new Map();
+const PEER_CONNECT_TIMEOUT_MS = 10000;
+
 // ========== LOCALSTORAGE HELPERS ==========
 function ambilData(kunci) { 
     const data = localStorage.getItem(kunci);
@@ -2017,43 +2023,12 @@ function initRealtimeSocket() {
     socket.on("disconnect", () => { realtimeConnected = false; });
     socket.on("server:ready", data => console.log("Realtime server ready", data));
     socket.on("room:joined", data => {
-    console.log("ROOM JOINED:", data);
-
-    serverSessions = Object.fromEntries(
-        (data.users || []).map(u => [u.nama, u])
-    );
-
-    daftarNamaTerhubung = (data.users || []).map(u => u.nama);
-
-    if(!daftarNamaTerhubung.includes(namaSaya)) {
-        daftarNamaTerhubung.unshift(namaSaya);
-    }
-
-    perbaruiDaftarPengguna();
-
-    // ==========================================
-    // ROOM SUDAH BERHASIL TERSINKRON
-    // ==========================================
-    const status = document.getElementById("statusKoneksi");
-
-    if(status) {
-        status.className = "status status-hijau";
-
-        if(daftarNamaTerhubung.length <= 1) {
-            status.innerHTML =
-                "✅ <b>SIAP!</b> Room berhasil tersinkron — menunggu pengguna lain";
-        } else {
-            status.innerHTML =
-                `✅ <b>SIAP!</b> Terhubung — ${daftarNamaTerhubung.length} pengguna dalam channel`;
-        }
-    }
-
-    // Sinkronisasi PeerJS dengan user lain
-    sinkronkanPeerUsers(data.users || []);
-
-    // Sinkronisasi presence
-    syncPresenceToServer();
-});
+        serverSessions = Object.fromEntries((data.users || []).map(u => [u.nama, u]));
+        daftarNamaTerhubung = (data.users || []).map(u => u.nama);
+        if(!daftarNamaTerhubung.includes(namaSaya)) daftarNamaTerhubung.unshift(namaSaya);
+        perbaruiDaftarPengguna();
+        sinkronkanPeerUsers(data.users || []);
+    });
     socket.on("room:users", users => {
         serverSessions = Object.fromEntries((users || []).map(u => [u.nama, u]));
         daftarNamaTerhubung = (users || []).map(u => u.nama);
@@ -2077,19 +2052,115 @@ function syncPresenceToServer() {
     if(socket && realtimeConnected) socket.emit("presence:update", { micStatus:micAktif, floorStatus:myFloorStatus });
 }
 function sinkronkanPeerUsers(users) {
-    if(!peer || !streamSaya) return;
-    users.forEach(u => {
-        if(!u.peerId || u.peerId === peerIdSaya || koneksi[u.peerId]) return;
-        try {
-            const conn = peer.connect(u.peerId, { reliable:true, metadata:{nama:namaSaya} });
-            if(conn) {
-                koneksi[u.peerId] = conn;
-                conn.on("open", () => { aturKoneksi(conn); try { conn.send({jenis:"laporNama", nama:namaSaya}); } catch(e){}; perbaruiStatusTerhubung(); });
-                conn.on("error", () => delete koneksi[u.peerId]);
+    if(!peer || peer.destroyed || !peer.open || !streamSaya) return;
+
+    const activePeerIds = new Set(
+        (users || [])
+            .map(u => u?.peerId)
+            .filter(id => id && id !== peerIdSaya)
+    );
+
+    // Bersihkan koneksi stale: peer sudah tidak ada di room.
+    Object.keys(koneksi).forEach(peerId => {
+        if(!activePeerIds.has(peerId)) {
+            try { koneksi[peerId]?.close(); } catch(e) {}
+            delete koneksi[peerId];
+            peerConnecting.delete(peerId);
+            if(peerConnectTimers.has(peerId)) {
+                clearTimeout(peerConnectTimers.get(peerId));
+                peerConnectTimers.delete(peerId);
             }
-            const call = peer.call(u.peerId, streamSaya, { metadata:{nama:namaSaya} });
-            if(call) pasangSuara(call);
-        } catch(e) { console.warn("Peer connect failed", u.peerId, e); }
+        }
+    });
+
+    (users || []).forEach(u => {
+        const targetPeerId = u?.peerId;
+        if(!targetPeerId || targetPeerId === peerIdSaya) return;
+
+        // Koneksi yang benar-benar OPEN dipertahankan.
+        if(koneksi[targetPeerId]?.open) return;
+
+        // Jika object lama ada tetapi tidak pernah OPEN, buang agar dapat retry.
+        if(koneksi[targetPeerId] && !koneksi[targetPeerId].open && !peerConnecting.has(targetPeerId)) {
+            try { koneksi[targetPeerId].close(); } catch(e) {}
+            delete koneksi[targetPeerId];
+        }
+
+        // Jangan membuat beberapa koneksi paralel ke peer yang sama.
+        if(peerConnecting.has(targetPeerId)) return;
+        peerConnecting.add(targetPeerId);
+
+        try {
+            console.log('[PEER] Connecting to', u.nama, targetPeerId);
+            const conn = peer.connect(targetPeerId, {
+                reliable: true,
+                metadata: { nama: namaSaya }
+            });
+
+            if(!conn) {
+                peerConnecting.delete(targetPeerId);
+                return;
+            }
+
+            koneksi[targetPeerId] = conn;
+
+            const clearConnectState = () => {
+                peerConnecting.delete(targetPeerId);
+                if(peerConnectTimers.has(targetPeerId)) {
+                    clearTimeout(peerConnectTimers.get(targetPeerId));
+                    peerConnectTimers.delete(targetPeerId);
+                }
+            };
+
+            const timer = setTimeout(() => {
+                if(!conn.open) {
+                    console.warn('[PEER] Connect timeout:', u.nama, targetPeerId);
+                    try { conn.close(); } catch(e) {}
+                    if(koneksi[targetPeerId] === conn) delete koneksi[targetPeerId];
+                    clearConnectState();
+                }
+            }, PEER_CONNECT_TIMEOUT_MS);
+            peerConnectTimers.set(targetPeerId, timer);
+
+            conn.on('open', () => {
+                clearConnectState();
+                koneksi[targetPeerId] = conn;
+                aturKoneksi(conn);
+                try { conn.send({ jenis:'laporNama', nama:namaSaya }); } catch(e) {}
+                perbaruiStatusTerhubung();
+                console.log('[PEER] Data OPEN:', u.nama, targetPeerId);
+
+                // Mulai media call setelah data channel benar-benar terbuka.
+                // Ini menghindari call berulang setiap room:users saat data peer belum siap.
+                try {
+                    const call = peer.call(targetPeerId, streamSaya, { metadata:{nama:namaSaya} });
+                    if(call) pasangSuara(call);
+                } catch(e) {
+                    console.warn('[PEER] Media call failed:', u.nama, targetPeerId, e);
+                }
+            });
+
+            conn.on('error', err => {
+                console.warn('[PEER] Data error:', u.nama, targetPeerId, err);
+                clearConnectState();
+                if(koneksi[targetPeerId] === conn) delete koneksi[targetPeerId];
+            });
+
+            conn.on('close', () => {
+                console.log('[PEER] Data closed:', u.nama, targetPeerId);
+                clearConnectState();
+                if(koneksi[targetPeerId] === conn) delete koneksi[targetPeerId];
+            });
+
+        } catch(e) {
+            peerConnecting.delete(targetPeerId);
+            if(peerConnectTimers.has(targetPeerId)) {
+                clearTimeout(peerConnectTimers.get(targetPeerId));
+                peerConnectTimers.delete(targetPeerId);
+            }
+            delete koneksi[targetPeerId];
+            console.warn('[PEER] Connect failed:', u.nama, targetPeerId, e);
+        }
     });
 }
 
