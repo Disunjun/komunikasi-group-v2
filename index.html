@@ -2017,12 +2017,43 @@ function initRealtimeSocket() {
     socket.on("disconnect", () => { realtimeConnected = false; });
     socket.on("server:ready", data => console.log("Realtime server ready", data));
     socket.on("room:joined", data => {
-        serverSessions = Object.fromEntries((data.users || []).map(u => [u.nama, u]));
-        daftarNamaTerhubung = (data.users || []).map(u => u.nama);
-        if(!daftarNamaTerhubung.includes(namaSaya)) daftarNamaTerhubung.unshift(namaSaya);
-        perbaruiDaftarPengguna();
-        sinkronkanPeerUsers(data.users || []);
-    });
+    console.log("ROOM JOINED:", data);
+
+    serverSessions = Object.fromEntries(
+        (data.users || []).map(u => [u.nama, u])
+    );
+
+    daftarNamaTerhubung = (data.users || []).map(u => u.nama);
+
+    if(!daftarNamaTerhubung.includes(namaSaya)) {
+        daftarNamaTerhubung.unshift(namaSaya);
+    }
+
+    perbaruiDaftarPengguna();
+
+    // ==========================================
+    // ROOM SUDAH BERHASIL TERSINKRON
+    // ==========================================
+    const status = document.getElementById("statusKoneksi");
+
+    if(status) {
+        status.className = "status status-hijau";
+
+        if(daftarNamaTerhubung.length <= 1) {
+            status.innerHTML =
+                "✅ <b>SIAP!</b> Room berhasil tersinkron — menunggu pengguna lain";
+        } else {
+            status.innerHTML =
+                `✅ <b>SIAP!</b> Terhubung — ${daftarNamaTerhubung.length} pengguna dalam channel`;
+        }
+    }
+
+    // Sinkronisasi PeerJS dengan user lain
+    sinkronkanPeerUsers(data.users || []);
+
+    // Sinkronisasi presence
+    syncPresenceToServer();
+});
     socket.on("room:users", users => {
         serverSessions = Object.fromEntries((users || []).map(u => [u.nama, u]));
         daftarNamaTerhubung = (users || []).map(u => u.nama);
