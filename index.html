@@ -391,7 +391,6 @@
         ::-webkit-scrollbar-thumb:hover { background: #64748b; }
     </style>
 <base target="_blank">
-<base target="_blank">
 </head>
 <body>
 <div class="theme-toggle" id="themeToggle" onclick="toggleTheme()" title="Ganti Tema">🌙</div>
@@ -858,6 +857,13 @@ let socket = null;
 let serverSessions = {};
 let peerIdSaya = null;
 let realtimeConnected = false;
+
+// ========== PEERJS RECONNECT STATE (GLOBAL) ==========
+// Harus global karena dipakai saat masuk channel, reconnect, dan keluarChannel().
+let currentServerIndex = 0;
+let peerReconnectAttempts = 0;
+const MAX_RECONNECT_ATTEMPTS = 5;
+let peerReconnectTimer = null;
 
 // ========== LOCALSTORAGE HELPERS ==========
 function ambilData(kunci) { 
@@ -2520,10 +2526,7 @@ const PEERJS_SERVERS = [
     }
 ];
 
-let currentServerIndex = 0;
-let peerReconnectAttempts = 0;
-const MAX_RECONNECT_ATTEMPTS = 5;
-let peerReconnectTimer = null;
+
 
 function createPeer() {
     const serverConfig = PEERJS_SERVERS[currentServerIndex];
