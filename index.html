@@ -2442,19 +2442,31 @@ function muatDaftarGrup() {
 }
 
 // ========== MASUK CHANNEL ==========
-function masukChannel(namaGrup, namaChannel) {
+async function masukChannel(namaGrup, namaChannel) {
     const grup = ambilData("daftarGrup");
     const g = grup.find(x => x.nama === namaGrup);
     if(!g) return toast("Grup tidak ditemukan!", "merah");
     const c = g.channel.find(x => x.nama === namaChannel);
     if(!c) return toast("Channel tidak ditemukan!", "merah");
 
-    // Cek permission
-    const users = ambilData("logPengguna");
-    const userData = users.find(u => u.nama === namaSaya);
-    if(!userData) return toast("Data user tidak ditemukan!", "merah");
-    if(userData.banned) return toast("Akun Anda di-banned!", "merah");
-    if(userData.status === "nonaktif") return toast("Akun Anda dinonaktifkan!", "merah");
+    // Cek permission dari PostgreSQL, bukan localStorage logPengguna.
+    // Login user sudah memakai PostgreSQL; validasi channel harus memakai sumber data yang sama.
+    let userData = null;
+    if(namaSaya === ADMIN_NAMA) {
+        userData = { nama: ADMIN_NAMA, role: "admin", status: "aktif", banned: false, muted: false };
+    } else {
+        try {
+            const dataUsers = await apiRequest('/api/users', { method:'GET' }, true);
+            const daftarUsers = Array.isArray(dataUsers.users) ? dataUsers.users : [];
+            userData = daftarUsers.find(u => String(u.nama || '').trim().toLowerCase() === String(namaSaya || '').trim().toLowerCase());
+        } catch(err) {
+            console.error('[CHANNEL] Gagal mengambil user PostgreSQL:', err);
+            return toast(`❌ Gagal memverifikasi user: ${err.message}`, "merah");
+        }
+    }
+    if(!userData) return toast(`Data user "${namaSaya}" tidak ditemukan di PostgreSQL!`, "merah");
+    if(userData.banned === true) return toast("Akun Anda di-banned!", "merah");
+    if(String(userData.status || '').toLowerCase() === "nonaktif") return toast("Akun Anda dinonaktifkan!", "merah");
     if(g.status === "nonaktif") return toast("Grup ini dinonaktifkan!", "merah");
     if(c.status === "nonaktif") return toast("Channel ini dinonaktifkan!", "merah");
     if(c.locked) return toast("Channel ini terkunci! Hubungi admin.", "merah");
