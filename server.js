@@ -2,1133 +2,127 @@ import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import http from 'http';
+import crypto from 'crypto';
+import { promisify } from 'util';
 import { Server } from 'socket.io';
 import pg from 'pg';
 
 const { Pool } = pg;
-
-// ======================================================
-// APP / SERVER
-// ======================================================
-
+const scryptAsync = promisify(crypto.scrypt);
 const app = express();
 const server = http.createServer(app);
-
 const PORT = Number(process.env.PORT || 3000);
+const FRONTEND_ORIGINS = (process.env.FRONTEND_ORIGINS || '*').split(',').map(s => s.trim()).filter(Boolean);
+const ADMIN_NAME = process.env.ADMIN_NAME || 'Didik Suntoro';
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'D1d1kSunt0r0@#$';
 
-const FRONTEND_ORIGINS = (
-    process.env.FRONTEND_ORIGINS || '*'
-)
-    .split(',')
-    .map(s => s.trim())
-    .filter(Boolean);
-
-
-// ======================================================
-// SOCKET.IO
-// ======================================================
-
-const io = new Server(server, {
-    cors: {
-        origin: FRONTEND_ORIGINS.includes('*')
-            ? true
-            : FRONTEND_ORIGINS,
-
-        methods: ['GET', 'POST']
-    },
-
-    transports: ['websocket', 'polling']
-});
-
-
-app.use(cors({
-    origin: FRONTEND_ORIGINS.includes('*')
-        ? true
-        : FRONTEND_ORIGINS
-}));
-
-app.use(express.json());
-
-
-// ======================================================
-// POSTGRESQL RAILWAY
-// ======================================================
+const corsOrigin = FRONTEND_ORIGINS.includes('*') ? true : FRONTEND_ORIGINS;
+const io = new Server(server, { cors: { origin: corsOrigin, methods: ['GET','POST','PATCH','DELETE'] }, transports: ['websocket','polling'] });
+app.use(cors({ origin: corsOrigin }));
+app.use(express.json({ limit: '64kb' }));
 
 let db = null;
-
 if (process.env.DATABASE_URL) {
+  db = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
+  console.log('[DB] DATABASE_URL ditemukan.');
+} else console.warn('[DB] DATABASE_URL tidak ditemukan. Database dinonaktifkan.');
 
-    db = new Pool({
-        connectionString: process.env.DATABASE_URL,
-
-        ssl: {
-            rejectUnauthorized: false
-        }
-    });
-
-    console.log('[DB] DATABASE_URL ditemukan.');
-
-} else {
-
-    console.warn(
-        '[DB] DATABASE_URL tidak ditemukan. Database dinonaktifkan.'
-    );
+async function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const derived = await scryptAsync(password, salt, 64);
+  return `scrypt$${salt}$${Buffer.from(derived).toString('hex')}`;
 }
-
-
-// ======================================================
-// TEST DATABASE CONNECTION
-// ======================================================
+async function verifyPassword(password, stored) {
+  if (!stored) return false;
+  if (!stored.startsWith('scrypt$')) return crypto.timingSafeEqual(Buffer.from(String(password)), Buffer.from(String(stored)));
+  const [, salt, hex] = stored.split('$');
+  const derived = Buffer.from(await scryptAsync(password, salt, 64));
+  const expected = Buffer.from(hex, 'hex');
+  return derived.length === expected.length && crypto.timingSafeEqual(derived, expected);
+}
+function publicUser(row) {
+  return { id: row.id, nama: row.username, role: row.role || 'user', status: row.active ? 'aktif' : 'nonaktif', banned: !!row.banned, muted: !!row.muted, dibuatOleh: row.created_by || 'system', tanggalDibuat: row.created_at ? new Date(row.created_at).toLocaleDateString('id-ID') : '-' };
+}
+function requireDb(res) { if (db) return true; res.status(503).json({ok:false,message:'Database belum tersedia'}); return false; }
+function isAdminRequest(req) { return req.get('x-admin-name') === ADMIN_NAME && req.get('x-admin-password') === ADMIN_PASSWORD; }
+function requireAdmin(req,res,next) { if (!isAdminRequest(req)) return res.status(401).json({ok:false,message:'Admin tidak terautentikasi'}); next(); }
 
 async function testDatabase() {
-
-    if (!db) return;
-
-    try {
-
-        const result = await db.query(
-            'SELECT NOW() AS waktu'
-        );
-
-        console.log(
-            '[DB] PostgreSQL CONNECTED:',
-            result.rows[0].waktu
-        );
-
-    } catch (err) {
-
-        console.error(
-            '[DB] PostgreSQL CONNECTION ERROR:',
-            err.message
-        );
-    }
+  if (!db) return;
+  try { const r = await db.query('SELECT NOW() AS waktu'); console.log('[DB] PostgreSQL CONNECTED:', r.rows[0].waktu); }
+  catch (e) { console.error('[DB] PostgreSQL CONNECTION ERROR:', e.message); }
 }
-
-
-// ======================================================
-// CREATE TABLES
-// ======================================================
-
 async function initializeDatabase() {
-
-    if (!db) return;
-
-    try {
-
-        // ------------------------------------------------
-        // USERS
-        // ------------------------------------------------
-
-        await db.query(`
-            CREATE TABLE IF NOT EXISTS users (
-
-                id BIGSERIAL PRIMARY KEY,
-
-                username VARCHAR(100)
-                    UNIQUE
-                    NOT NULL,
-
-                password_hash TEXT,
-
-                role VARCHAR(30)
-                    DEFAULT 'user',
-
-                active BOOLEAN
-                    DEFAULT TRUE,
-
-                muted BOOLEAN
-                    DEFAULT FALSE,
-
-                created_at TIMESTAMPTZ
-                    DEFAULT NOW(),
-
-                updated_at TIMESTAMPTZ
-                    DEFAULT NOW()
-            )
-        `);
-
-
-        // ------------------------------------------------
-        // ONLINE SESSIONS
-        // ------------------------------------------------
-
-        await db.query(`
-            CREATE TABLE IF NOT EXISTS online_sessions (
-
-                socket_id VARCHAR(255)
-                    PRIMARY KEY,
-
-                username VARCHAR(100)
-                    NOT NULL,
-
-                group_name VARCHAR(100),
-
-                channel_name VARCHAR(100),
-
-                peer_id VARCHAR(255),
-
-                mic_status BOOLEAN
-                    DEFAULT FALSE,
-
-                floor_status VARCHAR(30)
-                    DEFAULT 'idle',
-
-                updated_at TIMESTAMPTZ
-                    DEFAULT NOW()
-            )
-        `);
-
-
-        // ------------------------------------------------
-        // CHAT MESSAGES
-        // disiapkan sekarang untuk tahap berikutnya
-        // ------------------------------------------------
-
-        await db.query(`
-            CREATE TABLE IF NOT EXISTS chat_messages (
-
-                id BIGSERIAL PRIMARY KEY,
-
-                username VARCHAR(100)
-                    NOT NULL,
-
-                group_name VARCHAR(100),
-
-                channel_name VARCHAR(100),
-
-                message TEXT
-                    NOT NULL,
-
-                created_at TIMESTAMPTZ
-                    DEFAULT NOW()
-            )
-        `);
-
-
-        console.log(
-            '[DB] Database tables READY.'
-        );
-
-    } catch (err) {
-
-        console.error(
-            '[DB] Database initialization ERROR:',
-            err.message
-        );
-    }
+  if (!db) return;
+  try {
+    await db.query(`CREATE TABLE IF NOT EXISTS users (id BIGSERIAL PRIMARY KEY, username VARCHAR(100) UNIQUE NOT NULL, password_hash TEXT, role VARCHAR(30) DEFAULT 'user', active BOOLEAN DEFAULT TRUE, muted BOOLEAN DEFAULT FALSE, created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW())`);
+    await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS banned BOOLEAN DEFAULT FALSE`);
+    await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS created_by VARCHAR(100) DEFAULT 'system'`);
+    await db.query(`CREATE TABLE IF NOT EXISTS online_sessions (socket_id VARCHAR(255) PRIMARY KEY, username VARCHAR(100) NOT NULL, group_name VARCHAR(100), channel_name VARCHAR(100), peer_id VARCHAR(255), mic_status BOOLEAN DEFAULT FALSE, floor_status VARCHAR(30) DEFAULT 'idle', updated_at TIMESTAMPTZ DEFAULT NOW())`);
+    await db.query(`CREATE TABLE IF NOT EXISTS chat_messages (id BIGSERIAL PRIMARY KEY, username VARCHAR(100) NOT NULL, group_name VARCHAR(100), channel_name VARCHAR(100), message TEXT NOT NULL, created_at TIMESTAMPTZ DEFAULT NOW())`);
+    const adminHash = await hashPassword(ADMIN_PASSWORD);
+    await db.query(`INSERT INTO users(username,password_hash,role,active,banned,muted,created_by) VALUES($1,$2,'admin',TRUE,FALSE,FALSE,'system') ON CONFLICT(username) DO UPDATE SET role='admin'`, [ADMIN_NAME, adminHash]);
+    console.log('[DB] Database tables READY.');
+  } catch(e) { console.error('[DB] Database initialization ERROR:', e.message); }
 }
 
-
-// ======================================================
-// REALTIME MEMORY STATE
-// ======================================================
-
-const sessions = new Map();
-
-const rooms = new Map();
-
-const kicked = new Map();
-
-
-// ======================================================
-// SESSION HELPERS
-// ======================================================
-
-function publicSessions() {
-
-    const out = {};
-
-    for (const s of sessions.values()) {
-
-        out[s.nama] = {
-
-            nama: s.nama,
-
-            group: s.group,
-
-            channel: s.channel,
-
-            micStatus: !!s.micStatus,
-
-            floorStatus:
-                s.floorStatus || 'idle',
-
-            peerId:
-                s.peerId || null,
-
-            timestamp:
-                s.timestamp
-        };
-    }
-
-    return out;
-}
-
-
-function roomUsers(room) {
-
-    const ids =
-        rooms.get(room) || new Set();
-
-    return [...ids]
-
-        .map(id =>
-            sessions.get(id)
-        )
-
-        .filter(Boolean)
-
-        .map(s => ({
-
-            nama: s.nama,
-
-            group: s.group,
-
-            channel: s.channel,
-
-            peerId: s.peerId,
-
-            micStatus:
-                !!s.micStatus,
-
-            floorStatus:
-                s.floorStatus || 'idle'
-        }));
-}
-
-
-// ======================================================
-// POSTGRES PRESENCE
-// ======================================================
-
-async function savePresence(session) {
-
-    if (!db || !session)
-        return;
-
-    try {
-
-        await db.query(
-            `
-            INSERT INTO online_sessions
-            (
-                socket_id,
-                username,
-                group_name,
-                channel_name,
-                peer_id,
-                mic_status,
-                floor_status,
-                updated_at
-            )
-
-            VALUES
-            (
-                $1,$2,$3,$4,$5,$6,$7,NOW()
-            )
-
-            ON CONFLICT (socket_id)
-
-            DO UPDATE SET
-
-                username =
-                    EXCLUDED.username,
-
-                group_name =
-                    EXCLUDED.group_name,
-
-                channel_name =
-                    EXCLUDED.channel_name,
-
-                peer_id =
-                    EXCLUDED.peer_id,
-
-                mic_status =
-                    EXCLUDED.mic_status,
-
-                floor_status =
-                    EXCLUDED.floor_status,
-
-                updated_at =
-                    NOW()
-            `,
-
-            [
-                session.socketId,
-                session.nama,
-                session.group,
-                session.channel,
-                session.peerId,
-                !!session.micStatus,
-                session.floorStatus || 'idle'
-            ]
-        );
-
-    } catch (err) {
-
-        console.error(
-            '[DB] savePresence:',
-            err.message
-        );
-    }
-}
-
-
-async function removePresence(socketId) {
-
-    if (!db)
-        return;
-
-    try {
-
-        await db.query(
-            `
-            DELETE FROM online_sessions
-            WHERE socket_id = $1
-            `,
-            [socketId]
-        );
-
-    } catch (err) {
-
-        console.error(
-            '[DB] removePresence:',
-            err.message
-        );
-    }
-}
-
-
-// ======================================================
-// EMIT PRESENCE
-// ======================================================
-
-function emitPresence() {
-
-    io.emit(
-        'presence:update',
-        publicSessions()
-    );
-}
-
-
-// ======================================================
-// HTTP HEALTH
-// ======================================================
-
-app.get('/health', async (req, res) => {
-
-    let database = 'disabled';
-
-    if (db) {
-
-        try {
-
-            await db.query('SELECT 1');
-
-            database = 'connected';
-
-        } catch {
-
-            database = 'error';
-        }
-    }
-
-    res.json({
-
-        ok: true,
-
-        service:
-            'komunikasi-group-realtime',
-
-        version:
-            '2.1.0',
-
-        database,
-
-        time:
-            new Date().toISOString(),
-
-        users:
-            sessions.size
-    });
+// ===== USER / AUTH API =====
+app.post('/api/auth/register', async (req,res) => {
+  if (!requireDb(res)) return;
+  try {
+    const nama=String(req.body?.nama||'').trim(), sandi=String(req.body?.sandi||'');
+    if(nama.length<2 || sandi.length<4) return res.status(400).json({ok:false,message:'Nama minimal 2 karakter dan password minimal 4 karakter.'});
+    if(nama.toLowerCase()===ADMIN_NAME.toLowerCase()) return res.status(400).json({ok:false,message:'Nama ini tidak boleh digunakan.'});
+    const h=await hashPassword(sandi);
+    const r=await db.query(`INSERT INTO users(username,password_hash,role,active,banned,muted,created_by) VALUES($1,$2,'user',TRUE,FALSE,FALSE,$1) RETURNING *`,[nama,h]);
+    console.log('[USER] REGISTER:', nama); res.json({ok:true,user:publicUser(r.rows[0])});
+  } catch(e) { if(e.code==='23505') return res.status(409).json({ok:false,message:'Nama sudah terdaftar.'}); console.error('[USER] REGISTER ERROR:',e.message); res.status(500).json({ok:false,message:'Gagal mendaftar user.'}); }
 });
-
-
-// ======================================================
-// PRESENCE API
-// ======================================================
-
-app.get(
-    '/api/presence',
-    (req, res) => {
-
-        res.json({
-
-            ok: true,
-
-            sessions:
-                publicSessions()
-        });
-    }
-);
-
-
-// ======================================================
-// DATABASE TEST API
-// ======================================================
-
-app.get(
-    '/api/db-test',
-
-    async (req, res) => {
-
-        if (!db) {
-
-            return res
-                .status(503)
-                .json({
-
-                    ok: false,
-
-                    database:
-                        'DATABASE_URL not configured'
-                });
-        }
-
-        try {
-
-            const result =
-                await db.query(`
-                    SELECT
-                        NOW() AS server_time,
-                        current_database() AS database_name
-                `);
-
-            res.json({
-
-                ok: true,
-
-                database:
-                    'connected',
-
-                result:
-                    result.rows[0]
-            });
-
-        } catch (err) {
-
-            res
-                .status(500)
-                .json({
-
-                    ok: false,
-
-                    error:
-                        err.message
-                });
-        }
-    }
-);
-
-
-// ======================================================
-// SOCKET.IO
-// ======================================================
-
-io.on(
-    'connection',
-
-    socket => {
-
-        console.log(
-            '[SOCKET] Connected:',
-            socket.id
-        );
-
-
-        socket.emit(
-            'server:ready',
-
-            {
-                version:
-                    '2.1.0',
-
-                transport:
-                    socket.conn.transport.name
-            }
-        );
-
-
-        // ==================================================
-        // ROOM JOIN
-        // ==================================================
-
-        socket.on(
-            'room:join',
-
-            async payload => {
-
-                try {
-
-                    const nama =
-                        String(
-                            payload?.nama || ''
-                        ).trim();
-
-                    const group =
-                        String(
-                            payload?.group || ''
-                        ).trim();
-
-                    const channel =
-                        String(
-                            payload?.channel || ''
-                        ).trim();
-
-                    const peerId =
-                        String(
-                            payload?.peerId || ''
-                        ).trim();
-
-                    const maxUsers =
-                        Number(
-                            payload?.maxUsers || 0
-                        );
-
-
-                    if (
-                        !nama ||
-                        !group ||
-                        !channel ||
-                        !peerId
-                    ) {
-
-                        return socket.emit(
-                            'room:error',
-
-                            {
-                                message:
-                                    'Data room tidak lengkap.'
-                            }
-                        );
-                    }
-
-
-                    // ---------------------------------------
-                    // KICK CHECK
-                    // ---------------------------------------
-
-                    const blockedUntil =
-                        kicked.get(nama);
-
-                    if (
-                        blockedUntil &&
-                        blockedUntil > Date.now()
-                    ) {
-
-                        return socket.emit(
-                            'room:error',
-
-                            {
-                                message:
-                                    'Anda sedang di-kick oleh admin.'
-                            }
-                        );
-                    }
-
-
-                    const room =
-                        `${group}::${channel}`;
-
-
-                    // ---------------------------------------
-                    // MAX USERS
-                    // ---------------------------------------
-
-                    const existing =
-                        [
-                            ...(
-                                rooms.get(room) ||
-                                new Set()
-                            )
-                        ]
-
-                        .map(id =>
-                            sessions.get(id)
-                        )
-
-                        .filter(Boolean)
-
-                        .filter(
-                            s =>
-                                s.nama !== nama
-                        );
-
-
-                    if (
-                        maxUsers > 0 &&
-                        existing.length >= maxUsers
-                    ) {
-
-                        return socket.emit(
-                            'room:error',
-
-                            {
-                                message:
-                                    `Channel penuh! Maksimal ${maxUsers} user.`
-                            }
-                        );
-                    }
-
-
-                    // ---------------------------------------
-                    // LEAVE OLD ROOM
-                    // ---------------------------------------
-
-                    const old =
-                        sessions.get(socket.id);
-
-
-                    if (old?.room) {
-
-                        rooms
-                            .get(old.room)
-                            ?.delete(socket.id);
-
-                        socket.leave(
-                            old.room
-                        );
-                    }
-
-
-                    // ---------------------------------------
-                    // CREATE SESSION
-                    // ---------------------------------------
-
-                    const session = {
-
-                        socketId:
-                            socket.id,
-
-                        nama,
-
-                        group,
-
-                        channel,
-
-                        room,
-
-                        peerId,
-
-                        micStatus:
-                            false,
-
-                        floorStatus:
-                            'idle',
-
-                        timestamp:
-                            Date.now()
-                    };
-
-
-                    sessions.set(
-                        socket.id,
-                        session
-                    );
-
-
-                    if (
-                        !rooms.has(room)
-                    ) {
-
-                        rooms.set(
-                            room,
-                            new Set()
-                        );
-                    }
-
-
-                    rooms
-                        .get(room)
-                        .add(socket.id);
-
-
-                    socket.join(room);
-
-
-                    // ---------------------------------------
-                    // SAVE POSTGRES
-                    // ---------------------------------------
-
-                    await savePresence(
-                        session
-                    );
-
-
-                    // ---------------------------------------
-                    // RESPONSE
-                    // ---------------------------------------
-
-                    socket.emit(
-                        'room:joined',
-
-                        {
-                            room,
-
-                            users:
-                                roomUsers(room),
-
-                            self:
-                                session
-                        }
-                    );
-
-
-                    io.to(room)
-                        .emit(
-                            'room:users',
-                            roomUsers(room)
-                        );
-
-
-                    emitPresence();
-
-
-                    console.log(
-                        '[ROOM JOIN]',
-                        nama,
-                        '=>',
-                        room
-                    );
-
-
-                } catch (err) {
-
-                    console.error(
-                        '[ROOM JOIN ERROR]',
-                        err
-                    );
-
-
-                    socket.emit(
-                        'room:error',
-
-                        {
-                            message:
-                                err.message ||
-                                'Gagal bergabung room.'
-                        }
-                    );
-                }
-            }
-        );
-
-
-        // ==================================================
-        // PRESENCE UPDATE
-        // ==================================================
-
-        socket.on(
-            'presence:update',
-
-            async patch => {
-
-                const s =
-                    sessions.get(
-                        socket.id
-                    );
-
-                if (!s)
-                    return;
-
-
-                if (
-                    typeof patch?.micStatus ===
-                    'boolean'
-                ) {
-
-                    s.micStatus =
-                        patch.micStatus;
-                }
-
-
-                if (
-                    typeof patch?.floorStatus ===
-                    'string'
-                ) {
-
-                    s.floorStatus =
-                        patch.floorStatus;
-                }
-
-
-                s.timestamp =
-                    Date.now();
-
-
-                await savePresence(s);
-
-
-                io.to(s.room)
-                    .emit(
-                        'room:users',
-                        roomUsers(s.room)
-                    );
-
-
-                emitPresence();
-            }
-        );
-
-
-        // ==================================================
-        // FLOOR / PTT EVENT
-        // ==================================================
-
-        socket.on(
-            'floor:event',
-
-            event => {
-
-                const s =
-                    sessions.get(
-                        socket.id
-                    );
-
-                if (!s?.room)
-                    return;
-
-
-                socket
-                    .to(s.room)
-                    .emit(
-                        'floor:event',
-
-                        {
-                            ...event,
-
-                            from:
-                                s.nama
-                        }
-                    );
-            }
-        );
-
-
-        // ==================================================
-        // ADMIN KICK
-        // ==================================================
-
-        socket.on(
-            'admin:kick',
-
-            ({ nama }) => {
-
-                if (!nama)
-                    return;
-
-
-                kicked.set(
-                    nama,
-                    Date.now() + 300000
-                );
-
-
-                for (
-                    const s of
-                    sessions.values()
-                ) {
-
-                    if (
-                        s.nama === nama
-                    ) {
-
-                        io.to(
-                            s.socketId
-                        ).emit(
-                            'admin:kick',
-
-                            {
-                                nama,
-
-                                expiresAt:
-                                    kicked.get(nama)
-                            }
-                        );
-
-
-                        io.sockets
-                            .sockets
-                            .get(
-                                s.socketId
-                            )
-                            ?.disconnect(true);
-                    }
-                }
-            }
-        );
-
-
-        // ==================================================
-        // DISCONNECT
-        // ==================================================
-
-        socket.on(
-            'disconnect',
-
-            async reason => {
-
-                const s =
-                    sessions.get(
-                        socket.id
-                    );
-
-
-                console.log(
-                    '[SOCKET] Disconnect:',
-                    socket.id,
-                    reason
-                );
-
-
-                if (!s)
-                    return;
-
-
-                rooms
-                    .get(s.room)
-                    ?.delete(
-                        socket.id
-                    );
-
-
-                if (
-                    rooms
-                        .get(s.room)
-                        ?.size === 0
-                ) {
-
-                    rooms.delete(
-                        s.room
-                    );
-                }
-
-
-                sessions.delete(
-                    socket.id
-                );
-
-
-                await removePresence(
-                    socket.id
-                );
-
-
-                if (s.room) {
-
-                    io.to(s.room)
-                        .emit(
-                            'room:users',
-                            roomUsers(s.room)
-                        );
-                }
-
-
-                emitPresence();
-            }
-        );
-    }
-);
-
-
-// ======================================================
-// CLEANUP STALE SESSION
-// ======================================================
-
-setInterval(
-    async () => {
-
-        const cutoff =
-            Date.now() - 65000;
-
-
-        for (
-            const [id, s]
-            of sessions
-        ) {
-
-            if (
-                s.timestamp <
-                cutoff
-            ) {
-
-                rooms
-                    .get(s.room)
-                    ?.delete(id);
-
-                sessions.delete(id);
-
-                await removePresence(id);
-            }
-        }
-
-
-        emitPresence();
-
-    },
-
-    15000
-);
-
-
-// ======================================================
-// START SERVER
-// ======================================================
-
-async function startServer() {
-
-    console.log(
-        '========================================'
-    );
-
-    console.log(
-        ' Komunikasi Group V2 Backend'
-    );
-
-    console.log(
-        ' Version 2.1.0'
-    );
-
-    console.log(
-        '========================================'
-    );
-
-
-    await testDatabase();
-
-    await initializeDatabase();
-
-
-    server.listen(
-        PORT,
-
-        () => {
-
-            console.log(
-                `[SERVER] Listening on port ${PORT}`
-            );
-
-            console.log(
-                `[SERVER] PostgreSQL: ${
-                    db
-                        ? 'ENABLED'
-                        : 'DISABLED'
-                }`
-            );
-        }
-    );
-}
-
-
+app.post('/api/auth/login', async (req,res) => {
+  if (!requireDb(res)) return;
+  try {
+    const nama=String(req.body?.nama||'').trim(), sandi=String(req.body?.sandi||'');
+    const r=await db.query(`SELECT * FROM users WHERE lower(username)=lower($1) LIMIT 1`,[nama]);
+    const u=r.rows[0]; if(!u || !(await verifyPassword(sandi,u.password_hash))) return res.status(401).json({ok:false,message:'Nama atau Kata Sandi salah!'});
+    if(u.banned) return res.status(403).json({ok:false,message:'Akun Anda telah di-banned! Hubungi admin.'});
+    if(!u.active) return res.status(403).json({ok:false,message:'Akun Anda dinonaktifkan! Hubungi admin.'});
+    console.log('[USER] LOGIN:',u.username); res.json({ok:true,user:publicUser(u)});
+  } catch(e){ console.error('[USER] LOGIN ERROR:',e.message); res.status(500).json({ok:false,message:'Login gagal.'}); }
+});
+app.get('/api/users', requireAdmin, async (req,res)=>{ if(!requireDb(res)) return; try { const r=await db.query(`SELECT * FROM users ORDER BY id ASC`); res.json({ok:true,users:r.rows.map(publicUser)}); } catch(e){res.status(500).json({ok:false,message:e.message});} });
+app.post('/api/users', requireAdmin, async (req,res)=>{ if(!requireDb(res)) return; try { const nama=String(req.body?.nama||'').trim(),sandi=String(req.body?.sandi||''); if(nama.length<2||sandi.length<4)return res.status(400).json({ok:false,message:'Nama/password tidak valid.'}); const h=await hashPassword(sandi); const r=await db.query(`INSERT INTO users(username,password_hash,role,active,banned,muted,created_by) VALUES($1,$2,'user',TRUE,FALSE,FALSE,$3) RETURNING *`,[nama,h,ADMIN_NAME]); console.log('[USER] ADMIN CREATE:',nama); res.json({ok:true,user:publicUser(r.rows[0])}); } catch(e){ if(e.code==='23505')return res.status(409).json({ok:false,message:'Nama sudah terdaftar.'}); res.status(500).json({ok:false,message:e.message}); } });
+app.patch('/api/users/:id', requireAdmin, async (req,res)=>{ if(!requireDb(res)) return; try { const active=req.body?.status==='aktif', banned=!!req.body?.banned, muted=!!req.body?.muted; const r=await db.query(`UPDATE users SET active=$1,banned=$2,muted=$3,updated_at=NOW() WHERE id=$4 AND role<>'admin' RETURNING *`,[active,banned,muted,req.params.id]); if(!r.rows[0])return res.status(404).json({ok:false,message:'User tidak ditemukan/tidak dapat diubah.'}); console.log('[USER] UPDATE:',r.rows[0].username); res.json({ok:true,user:publicUser(r.rows[0])}); } catch(e){res.status(500).json({ok:false,message:e.message});} });
+app.patch('/api/users/:id/password', requireAdmin, async (req,res)=>{ if(!requireDb(res)) return; try { const sandi=String(req.body?.sandi||''); if(sandi.length<4)return res.status(400).json({ok:false,message:'Password minimal 4 karakter.'}); const h=await hashPassword(sandi); const r=await db.query(`UPDATE users SET password_hash=$1,updated_at=NOW() WHERE id=$2 AND role<>'admin' RETURNING username`,[h,req.params.id]); if(!r.rows[0])return res.status(404).json({ok:false,message:'User tidak ditemukan.'}); console.log('[USER] RESET PASSWORD:',r.rows[0].username); res.json({ok:true}); } catch(e){res.status(500).json({ok:false,message:e.message});} });
+app.delete('/api/users/:id', requireAdmin, async (req,res)=>{ if(!requireDb(res)) return; try { const r=await db.query(`DELETE FROM users WHERE id=$1 AND role<>'admin' RETURNING username`,[req.params.id]); if(!r.rows[0])return res.status(404).json({ok:false,message:'User tidak ditemukan.'}); console.log('[USER] DELETE:',r.rows[0].username); res.json({ok:true}); } catch(e){res.status(500).json({ok:false,message:e.message});} });
+
+const sessions=new Map(), rooms=new Map(), kicked=new Map();
+function publicSessions(){ const out={}; for(const s of sessions.values()) out[s.nama]={nama:s.nama,group:s.group,channel:s.channel,micStatus:!!s.micStatus,floorStatus:s.floorStatus||'idle',peerId:s.peerId||null,timestamp:s.timestamp}; return out; }
+function roomUsers(room){ return [...(rooms.get(room)||new Set())].map(id=>sessions.get(id)).filter(Boolean).map(s=>({nama:s.nama,group:s.group,channel:s.channel,peerId:s.peerId,micStatus:!!s.micStatus,floorStatus:s.floorStatus||'idle'})); }
+async function savePresence(s){ if(!db||!s)return; try{await db.query(`INSERT INTO online_sessions(socket_id,username,group_name,channel_name,peer_id,mic_status,floor_status,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,NOW()) ON CONFLICT(socket_id) DO UPDATE SET username=EXCLUDED.username,group_name=EXCLUDED.group_name,channel_name=EXCLUDED.channel_name,peer_id=EXCLUDED.peer_id,mic_status=EXCLUDED.mic_status,floor_status=EXCLUDED.floor_status,updated_at=NOW()`,[s.socketId,s.nama,s.group,s.channel,s.peerId,!!s.micStatus,s.floorStatus||'idle']);}catch(e){console.error('[DB] savePresence:',e.message);} }
+async function removePresence(id){if(!db)return;try{await db.query(`DELETE FROM online_sessions WHERE socket_id=$1`,[id]);}catch(e){console.error('[DB] removePresence:',e.message);}}
+function emitPresence(){io.emit('presence:update',publicSessions());}
+
+app.get('/health',async(req,res)=>{let database='disabled';if(db){try{await db.query('SELECT 1');database='connected';}catch{database='error';}}res.json({ok:true,service:'komunikasi-group-realtime',version:'2.2.0',database,time:new Date().toISOString(),users:sessions.size});});
+app.get('/api/presence',(req,res)=>res.json({ok:true,sessions:publicSessions()}));
+app.get('/api/db-test',async(req,res)=>{if(!requireDb(res))return;try{const r=await db.query(`SELECT NOW() AS server_time,current_database() AS database_name`);res.json({ok:true,database:'connected',result:r.rows[0]});}catch(e){res.status(500).json({ok:false,error:e.message});}});
+
+io.on('connection',socket=>{
+  console.log('[SOCKET] Connected:',socket.id); socket.emit('server:ready',{version:'2.2.0',transport:socket.conn.transport.name});
+  socket.on('room:join',async payload=>{try{
+    const nama=String(payload?.nama||'').trim(),group=String(payload?.group||'').trim(),channel=String(payload?.channel||'').trim(),peerId=String(payload?.peerId||'').trim(),maxUsers=Number(payload?.maxUsers||0);
+    if(!nama||!group||!channel||!peerId)return socket.emit('room:error',{message:'Data room tidak lengkap.'});
+    if(db){const ur=await db.query(`SELECT active,banned FROM users WHERE lower(username)=lower($1) LIMIT 1`,[nama]); if(!ur.rows[0])return socket.emit('room:error',{message:'User tidak terdaftar di database.'}); if(ur.rows[0].banned||!ur.rows[0].active)return socket.emit('room:error',{message:'Akun tidak diizinkan masuk.'});}
+    const blockedUntil=kicked.get(nama);if(blockedUntil&&blockedUntil>Date.now())return socket.emit('room:error',{message:'Anda sedang di-kick oleh admin.'});
+    const room=`${group}::${channel}`; const existing=[...(rooms.get(room)||new Set())].map(id=>sessions.get(id)).filter(Boolean).filter(s=>s.nama!==nama); if(maxUsers>0&&existing.length>=maxUsers)return socket.emit('room:error',{message:`Channel penuh! Maksimal ${maxUsers} user.`});
+    const old=sessions.get(socket.id);if(old?.room){rooms.get(old.room)?.delete(socket.id);socket.leave(old.room);} const session={socketId:socket.id,nama,group,channel,room,peerId,micStatus:false,floorStatus:'idle',timestamp:Date.now()}; sessions.set(socket.id,session);if(!rooms.has(room))rooms.set(room,new Set());rooms.get(room).add(socket.id);socket.join(room);await savePresence(session);socket.emit('room:joined',{room,users:roomUsers(room),self:session});io.to(room).emit('room:users',roomUsers(room));emitPresence();console.log('[ROOM JOIN]',nama,'=>',room);
+  }catch(e){console.error('[ROOM JOIN ERROR]',e);socket.emit('room:error',{message:e.message||'Gagal bergabung room.'});}});
+  socket.on('presence:update',async patch=>{const s=sessions.get(socket.id);if(!s)return;if(typeof patch?.micStatus==='boolean')s.micStatus=patch.micStatus;if(typeof patch?.floorStatus==='string')s.floorStatus=patch.floorStatus;s.timestamp=Date.now();await savePresence(s);io.to(s.room).emit('room:users',roomUsers(s.room));emitPresence();});
+  socket.on('floor:event',event=>{const s=sessions.get(socket.id);if(!s?.room)return;socket.to(s.room).emit('floor:event',{...event,from:s.nama});});
+  socket.on('chat:send',async(payload,ack)=>{try{const s=sessions.get(socket.id);if(!s?.room){ack?.({ok:false,message:'Belum masuk channel.'});return;}const message=String(payload?.message||'').trim().slice(0,2000);if(!message){ack?.({ok:false,message:'Pesan kosong.'});return;}if(db){const ur=await db.query(`SELECT muted,active,banned FROM users WHERE lower(username)=lower($1) LIMIT 1`,[s.nama]);if(ur.rows[0]?.muted||!ur.rows[0]?.active||ur.rows[0]?.banned){ack?.({ok:false,message:'Akun tidak diizinkan mengirim pesan.'});return;}await db.query(`INSERT INTO chat_messages(username,group_name,channel_name,message) VALUES($1,$2,$3,$4)`,[s.nama,s.group,s.channel,message]);}io.to(s.room).emit('chat:message',{nama:s.nama,message});ack?.({ok:true});}catch(e){console.error('[CHAT ERROR]',e.message);socket.emit('chat:error',{message:'Pesan gagal dikirim.'});ack?.({ok:false,message:'Pesan gagal dikirim.'});}});
+  socket.on('admin:kick',({nama})=>{if(!nama)return;kicked.set(nama,Date.now()+300000);for(const s of sessions.values())if(s.nama===nama){io.to(s.socketId).emit('admin:kick',{nama,expiresAt:kicked.get(nama)});io.sockets.sockets.get(s.socketId)?.disconnect(true);}});
+  socket.on('disconnect',async reason=>{const s=sessions.get(socket.id);console.log('[SOCKET] Disconnect:',socket.id,reason);if(!s)return;rooms.get(s.room)?.delete(socket.id);if(rooms.get(s.room)?.size===0)rooms.delete(s.room);sessions.delete(socket.id);await removePresence(socket.id);if(s.room)io.to(s.room).emit('room:users',roomUsers(s.room));emitPresence();});
+});
+setInterval(async()=>{const cutoff=Date.now()-65000;for(const[id,s]of sessions)if(s.timestamp<cutoff){rooms.get(s.room)?.delete(id);sessions.delete(id);await removePresence(id);}emitPresence();},15000);
+
+async function startServer(){console.log('========================================');console.log(' Komunikasi Group V2 Backend');console.log(' Version 2.2.0');console.log('========================================');await testDatabase();await initializeDatabase();server.listen(PORT,()=>{console.log(`[SERVER] Listening on port ${PORT}`);console.log(`[SERVER] PostgreSQL: ${db?'ENABLED':'DISABLED'}`);});}
 startServer();
