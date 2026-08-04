@@ -846,6 +846,7 @@ let destinationNode = null;
 let mixedStream = null;
 let adminTabAktif = 'users';
 let editUserTarget = null;
+let serverUsers = []; // PostgreSQL-backed user cache (admin UI only)
 let editGroupTarget = null;
 let editChannelTarget = { grupIdx: -1, chIdx: -1 };
 let heartbeatInterval = null;
@@ -989,61 +990,57 @@ function keluarSistem() {
 }
 function kembaliKeMasuk() { tampilHalaman("halamanMasuk"); }
 
-// ========== AUTH & LOGIN ==========
-function daftarAkun() {
+// ========== AUTH & LOGIN (POSTGRESQL) ==========
+async function apiRequest(path, options = {}, admin = false) {
+    const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
+    if(admin) {
+        headers["x-admin-name"] = ADMIN_NAMA;
+        headers["x-admin-password"] = ADMIN_PASS;
+    }
+    const response = await fetch(`${REALTIME_SERVER_URL}${path}`, { ...options, headers });
+    let data = {};
+    try { data = await response.json(); } catch(_) {}
+    if(!response.ok || data.ok === false) throw new Error(data.message || `HTTP ${response.status}`);
+    return data;
+}
+
+async function daftarAkun() {
     const nama = document.getElementById("regNama").value.trim();
     const sandi = document.getElementById("regPass").value;
-
     if(!nama || !sandi) return toast("❌ Isi Nama dan Kata Sandi terlebih dahulu!", "merah");
     if(nama.length < 2) return toast("❌ Nama minimal 2 karakter!", "merah");
     if(sandi.length < 4) return toast("❌ Kata sandi minimal 4 karakter!", "merah");
-    if(nama.toLowerCase() === ADMIN_NAMA.toLowerCase()) return toast("❌ Nama ini tidak boleh digunakan!", "merah");
-
-    const pengguna = ambilData("logPengguna");
-    const sudahAda = pengguna.some(p => p.nama.toLowerCase() === nama.toLowerCase());
-
-    if(sudahAda) return toast("❌ Nama ini sudah terdaftar! Gunakan nama lain.", "merah");
-
-    pengguna.push({
-        nama: nama, 
-        sandi: sandi,
-        status: "aktif",
-        banned: false,
-        muted: false,
-        dibuatOleh: nama,
-        tanggalDibuat: new Date().toLocaleDateString('id-ID')
-    });
-    if(simpanData("logPengguna", pengguna)) {
-        toast("✅ Berhasil Daftar! Silakan masuk.", "hijau");
+    try {
+        await apiRequest('/api/auth/register', { method:'POST', body:JSON.stringify({nama,sandi}) });
         document.getElementById("regNama").value = "";
         document.getElementById("regPass").value = "";
-    }
+        toast("✅ Berhasil Daftar ke server! Silakan masuk.", "hijau");
+    } catch(err) { toast(`❌ ${err.message}`, "merah"); }
 }
 
-function masukSistem() {
-    namaSaya = document.getElementById("loginNama").value.trim();
+async function masukSistem() {
+    const nama = document.getElementById("loginNama").value.trim();
     const sandi = document.getElementById("loginPass").value;
+    if(!nama || !sandi) return toast("❌ Isi Nama dan Kata Sandi!", "merah");
 
-    if(!namaSaya || !sandi) return toast("❌ Isi Nama dan Kata Sandi!", "merah");
-
-    // Admin login
-    if(namaSaya === ADMIN_NAMA && sandi === ADMIN_PASS) {
+    // Admin UI tetap memakai kredensial admin saat ini; user biasa wajib diverifikasi PostgreSQL.
+    if(nama === ADMIN_NAMA && sandi === ADMIN_PASS) {
+        namaSaya = nama;
         tampilHalaman("halamanAdmin");
         renderAdminPanel();
         toast("Selamat datang, Admin!", "hijau");
         return;
     }
-
-    const pengguna = ambilData("logPengguna");
-    const cocok = pengguna.find(p => p.nama === namaSaya && p.sandi === sandi);
-
-    if(!cocok) return toast("❌ Nama atau Kata Sandi salah!", "merah");
-    if(cocok.banned) return toast("❌ Akun Anda telah di-banned! Hubungi admin.", "merah");
-    if(cocok.status === "nonaktif") return toast("❌ Akun Anda dinonaktifkan! Hubungi admin.", "merah");
-
-    tampilHalaman("halamanDaftar");
-    muatDaftarGrup();
-    toast(`Selamat datang, ${namaSaya}!`, "hijau");
+    try {
+        const data = await apiRequest('/api/auth/login', { method:'POST', body:JSON.stringify({nama,sandi}) });
+        namaSaya = data.user.nama;
+        tampilHalaman("halamanDaftar");
+        muatDaftarGrup();
+        toast(`Selamat datang, ${namaSaya}!`, "hijau");
+    } catch(err) {
+        namaSaya = "";
+        toast(`❌ ${err.message}`, "merah");
+    }
 }
 
 // ========== LOG FUNCTIONS ==========
@@ -1199,7 +1196,7 @@ function pilihTab(tab) {
 }
 
 function updateStats() {
-    const users = ambilData("logPengguna");
+    const users = serverUsers;
     const grup = ambilData("daftarGrup");
     const sessions = ambilData("onlineSessions");
     const now = Date.now();
@@ -1552,165 +1549,84 @@ function renderAdminPanel() {
     if(adminTabAktif === 'monitoring') refreshMonitoring();
 }
 
-// ========== USERS MANAGEMENT ==========
-function renderUsers() {
+// ========== USERS MANAGEMENT (POSTGRESQL) ==========
+async function loadServerUsers() {
+    const data = await apiRequest('/api/users', { method:'GET' }, true);
+    serverUsers = data.users || [];
+    return serverUsers;
+}
+
+async function renderUsers() {
     const tbody = document.getElementById("tabelUsers");
-    const users = ambilData("logPengguna");
-    if(users.length === 0) {
+    if(!tbody) return;
+    tbody.innerHTML = `<tr><td colspan="7">Memuat user dari PostgreSQL...</td></tr>`;
+    try { await loadServerUsers(); }
+    catch(err) { tbody.innerHTML = `<tr><td colspan="7" class="empty-state">❌ ${err.message}</td></tr>`; return; }
+    if(serverUsers.length === 0) {
         tbody.innerHTML = `<tr><td colspan="7" class="empty-state"><div class="empty-state-icon">👤</div>Belum ada pengguna</td></tr>`;
         return;
     }
-    tbody.innerHTML = users.map((u, i) => {
+    tbody.innerHTML = serverUsers.map((u, i) => {
         const statusBadge = u.status === "aktif" ? '<span class="badge badge-aktif">AKTIF</span>' : '<span class="badge badge-nonaktif">NONAKTIF</span>';
         const bannedBadge = u.banned ? '<span class="badge badge-banned">BANNED</span>' : '<span class="badge badge-aktif">-</span>';
         const mutedBadge = u.muted ? '<span class="badge badge-muted">MUTED</span>' : '<span class="badge badge-aktif">-</span>';
-        const isAdmin = u.nama === ADMIN_NAMA;
+        const isAdmin = u.role === 'admin' || u.nama === ADMIN_NAMA;
         const disabled = isAdmin ? 'disabled' : '';
         return `<tr>
             <td><b>${u.nama}</b> ${isAdmin ? '<span class="admin-badge">ADMIN</span>' : ''}</td>
-            <td>${statusBadge}</td>
-            <td>${bannedBadge}</td>
-            <td>${mutedBadge}</td>
-            <td>${u.dibuatOleh || '-'}</td>
-            <td>${u.tanggalDibuat || '-'}</td>
-            <td>
-                <div class="aksi-btns">
-                    <button class="btn btn-sm" onclick="bukaEditUser(${i})" ${disabled}>Edit</button>
-                    <button class="btn btn-sm btn-kuning" onclick="bukaResetPass(${i})" ${disabled}>Reset Pass</button>
-                    <button class="btn btn-sm ${u.status==='aktif'?'btn-merah':'btn-hijau'}" onclick="toggleUserStatus(${i})" ${disabled}>${u.status==='aktif'?'Nonaktifkan':'Aktifkan'}</button>
-                    <button class="btn btn-sm ${u.banned?'btn-hijau':'btn-merah'}" onclick="toggleUserBan(${i})" ${disabled}>${u.banned?'Unban':'Ban'}</button>
-                    <button class="btn btn-sm ${u.muted?'btn-hijau':'btn-kuning'}" onclick="toggleUserMute(${i})" ${disabled}>${u.muted?'Unmute':'Mute'}</button>
-                    <button class="btn btn-sm btn-merah" onclick="kickUser('${u.nama}')" ${disabled}>Kick</button>
-                    <button class="btn btn-sm btn-merah" onclick="hapusUser(${i})" ${disabled}>Hapus</button>
-                </div>
-            </td>
-        </tr>`;
+            <td>${statusBadge}</td><td>${bannedBadge}</td><td>${mutedBadge}</td>
+            <td>${u.dibuatOleh || '-'}</td><td>${u.tanggalDibuat || '-'}</td>
+            <td><div class="aksi-btns">
+                <button class="btn btn-sm" onclick="bukaEditUser(${i})" ${disabled}>Edit</button>
+                <button class="btn btn-sm btn-kuning" onclick="bukaResetPass(${i})" ${disabled}>Reset Pass</button>
+                <button class="btn btn-sm ${u.status==='aktif'?'btn-merah':'btn-hijau'}" onclick="toggleUserStatus(${i})" ${disabled}>${u.status==='aktif'?'Nonaktifkan':'Aktifkan'}</button>
+                <button class="btn btn-sm ${u.banned?'btn-hijau':'btn-merah'}" onclick="toggleUserBan(${i})" ${disabled}>${u.banned?'Unban':'Ban'}</button>
+                <button class="btn btn-sm ${u.muted?'btn-hijau':'btn-kuning'}" onclick="toggleUserMute(${i})" ${disabled}>${u.muted?'Unmute':'Mute'}</button>
+                <button class="btn btn-sm btn-merah" onclick="kickUser('${u.nama.replace(/'/g,"\\'")}')" ${disabled}>Kick</button>
+                <button class="btn btn-sm btn-merah" onclick="hapusUser(${i})" ${disabled}>Hapus</button>
+            </div></td></tr>`;
     }).join('');
     updateStats();
 }
 
-function simpanUserBaru() {
-    const nama = document.getElementById("modalNamaUser").value.trim();
-    const sandi = document.getElementById("modalPassUser").value;
+async function simpanUserBaru() {
+    const nama=document.getElementById("modalNamaUser").value.trim(), sandi=document.getElementById("modalPassUser").value;
     if(!nama || !sandi) return toast("Isi nama dan password!", "merah");
-    if(nama.length < 2) return toast("Nama minimal 2 karakter!", "merah");
-    if(sandi.length < 4) return toast("Password minimal 4 karakter!", "merah");
-
-    const users = ambilData("logPengguna");
-    if(users.some(u => u.nama.toLowerCase() === nama.toLowerCase())) return toast("Nama sudah terdaftar!", "merah");
-
-    users.push({
-        nama, sandi,
-        status: "aktif",
-        banned: false,
-        muted: false,
-        dibuatOleh: ADMIN_NAMA,
-        tanggalDibuat: new Date().toLocaleDateString('id-ID')
-    });
-    simpanData("logPengguna", users);
-    catatAudit("BUAT USER", nama, `dibuat oleh admin`);
-    tutupModal('modalBuatUser');
-    renderUsers();
-    toast(`User "${nama}" berhasil dibuat!`, "hijau");
+    try {
+        await apiRequest('/api/users',{method:'POST',body:JSON.stringify({nama,sandi})},true);
+        catatAudit("BUAT USER",nama,"disimpan ke PostgreSQL");
+        tutupModal('modalBuatUser'); await renderUsers();
+        toast(`User "${nama}" berhasil dibuat di server!`,"hijau");
+    } catch(err){ toast(`❌ ${err.message}`,"merah"); }
 }
-
 function bukaEditUser(idx) {
-    const users = ambilData("logPengguna");
-    const u = users[idx];
-    editUserTarget = idx;
-    document.getElementById("editUserNama").value = u.nama;
-    document.getElementById("editUserStatus").value = u.status;
-    document.getElementById("editUserBanned").value = u.banned ? "true" : "false";
-    document.getElementById("editUserMuted").value = u.muted ? "true" : "false";
+    const u=serverUsers[idx]; if(!u) return;
+    editUserTarget=idx;
+    document.getElementById("editUserNama").value=u.nama;
+    document.getElementById("editUserStatus").value=u.status;
+    document.getElementById("editUserBanned").value=u.banned?"true":"false";
+    document.getElementById("editUserMuted").value=u.muted?"true":"false";
     bukaModal('modalEditUser');
 }
-function simpanEditUser() {
-    const users = ambilData("logPengguna");
-    if(editUserTarget === null) return;
-    users[editUserTarget].status = document.getElementById("editUserStatus").value;
-    users[editUserTarget].banned = document.getElementById("editUserBanned").value === "true";
-    users[editUserTarget].muted = document.getElementById("editUserMuted").value === "true";
-    simpanData("logPengguna", users);
-    catatAudit("EDIT USER", users[editUserTarget].nama, `status=${users[editUserTarget].status}, banned=${users[editUserTarget].banned}, muted=${users[editUserTarget].muted}`);
-    tutupModal('modalEditUser');
-    renderUsers();
-    toast("User berhasil diperbarui!", "hijau");
+async function simpanEditUser() {
+    const u=serverUsers[editUserTarget]; if(!u) return;
+    const patch={status:document.getElementById("editUserStatus").value,banned:document.getElementById("editUserBanned").value==="true",muted:document.getElementById("editUserMuted").value==="true"};
+    try { await apiRequest(`/api/users/${u.id}`,{method:'PATCH',body:JSON.stringify(patch)},true); catatAudit("EDIT USER",u.nama,JSON.stringify(patch)); tutupModal('modalEditUser'); await renderUsers(); toast("User berhasil diperbarui di server!","hijau"); }
+    catch(err){toast(`❌ ${err.message}`,"merah");}
 }
-
-function bukaResetPass(idx) {
-    const users = ambilData("logPengguna");
-    editUserTarget = idx;
-    document.getElementById("resetPassNama").value = users[idx].nama;
-    document.getElementById("resetPassBaru").value = "";
-    bukaModal('modalResetPass');
+function bukaResetPass(idx) { const u=serverUsers[idx]; if(!u)return; editUserTarget=idx; document.getElementById("resetPassNama").value=u.nama; document.getElementById("resetPassBaru").value=""; bukaModal('modalResetPass'); }
+async function simpanResetPass() {
+    const pass=document.getElementById("resetPassBaru").value, u=serverUsers[editUserTarget];
+    if(!u || pass.length<4) return toast("Password minimal 4 karakter!","merah");
+    try { await apiRequest(`/api/users/${u.id}/password`,{method:'PATCH',body:JSON.stringify({sandi:pass})},true); catatAudit("RESET PASSWORD",u.nama,"password di-reset di PostgreSQL"); tutupModal('modalResetPass'); toast("Password berhasil direset!","hijau"); }
+    catch(err){toast(`❌ ${err.message}`,"merah");}
 }
-function simpanResetPass() {
-    const pass = document.getElementById("resetPassBaru").value;
-    if(!pass || pass.length < 4) return toast("Password minimal 4 karakter!", "merah");
-    const users = ambilData("logPengguna");
-    users[editUserTarget].sandi = pass;
-    simpanData("logPengguna", users);
-    catatAudit("RESET PASSWORD", users[editUserTarget].nama, `password di-reset oleh admin`);
-    tutupModal('modalResetPass');
-    renderUsers();
-    toast("Password berhasil direset!", "hijau");
-}
-
-function toggleUserStatus(idx) {
-    const users = ambilData("logPengguna");
-    const u = users[idx];
-    if(u.nama === ADMIN_NAMA) return toast("Tidak bisa mengubah status admin!", "merah");
-    u.status = u.status === "aktif" ? "nonaktif" : "aktif";
-    simpanData("logPengguna", users);
-    catatAudit(u.status === 'aktif' ? 'AKTIFKAN USER' : 'NONAKTIFKAN USER', u.nama, `status diubah menjadi ${u.status}`);
-    renderUsers();
-    toast(`User "${u.nama}" ${u.status === 'aktif' ? 'diaktifkan' : 'dinonaktifkan'}!`, u.status === 'aktif' ? 'hijau' : 'kuning');
-}
-function toggleUserBan(idx) {
-    const users = ambilData("logPengguna");
-    const u = users[idx];
-    if(u.nama === ADMIN_NAMA) return toast("Tidak bisa ban admin!", "merah");
-    u.banned = !u.banned;
-    simpanData("logPengguna", users);
-    catatAudit(u.banned ? 'BAN USER' : 'UNBAN USER', u.nama, `banned=${u.banned}`);
-    renderUsers();
-    toast(`User "${u.nama}" ${u.banned ? 'di-banned' : 'unbanned'}!`, u.banned ? 'merah' : 'hijau');
-}
-function toggleUserMute(idx) {
-    const users = ambilData("logPengguna");
-    const u = users[idx];
-    if(u.nama === ADMIN_NAMA) return toast("Tidak bisa mute admin!", "merah");
-    u.muted = !u.muted;
-    simpanData("logPengguna", users);
-    catatAudit(u.muted ? 'MUTE USER' : 'UNMUTE USER', u.nama, `muted=${u.muted}`);
-    renderUsers();
-    toast(`User "${u.nama}" ${u.muted ? 'di-mute' : 'unmute'}!`, 'kuning');
-}
-function kickUser(nama) {
-    if(nama === ADMIN_NAMA) return toast("Tidak bisa kick admin!", "merah");
-    // Hapus session online
-    const sessions = ambilData("onlineSessions");
-    delete sessions[nama];
-    simpanData("onlineSessions", sessions);
-    // Tambah ke kicked list
-    const kicked = ambilData("kickedUsers");
-    kicked.push({ nama, kickedAt: Date.now(), kickedBy: ADMIN_NAMA });
-    simpanData("kickedUsers", kicked);
-    renderUsers();
-    catatAudit("KICK USER", nama, `di-kick oleh admin`);
-    toast(`User "${nama}" telah di-kick!`, "kuning");
-}
-function hapusUser(idx) {
-    const users = ambilData("logPengguna");
-    if(users[idx].nama === ADMIN_NAMA) return toast("Tidak bisa hapus admin!", "merah");
-    if(!confirm(`Yakin hapus user "${users[idx].nama}"?`)) return;
-    const nama = users[idx].nama;
-    users.splice(idx, 1);
-    simpanData("logPengguna", users);
-    renderUsers();
-    catatAudit("HAPUS USER", nama, `user dihapus oleh admin`);
-    toast(`User "${nama}" dihapus!`, "merah");
-}
+async function patchUserFlag(idx, patch, auditAction) { const u=serverUsers[idx]; if(!u||u.role==='admin')return; try{await apiRequest(`/api/users/${u.id}`,{method:'PATCH',body:JSON.stringify({...u,...patch})},true);catatAudit(auditAction,u.nama,JSON.stringify(patch));await renderUsers();toast(`User "${u.nama}" diperbarui!`,"hijau");}catch(err){toast(`❌ ${err.message}`,"merah");} }
+function toggleUserStatus(idx){const u=serverUsers[idx];if(u)patchUserFlag(idx,{status:u.status==='aktif'?'nonaktif':'aktif'},u.status==='aktif'?'NONAKTIFKAN USER':'AKTIFKAN USER');}
+function toggleUserBan(idx){const u=serverUsers[idx];if(u)patchUserFlag(idx,{banned:!u.banned},u.banned?'UNBAN USER':'BAN USER');}
+function toggleUserMute(idx){const u=serverUsers[idx];if(u)patchUserFlag(idx,{muted:!u.muted},u.muted?'UNMUTE USER':'MUTE USER');}
+function kickUser(nama) { if(nama===ADMIN_NAMA)return; if(socket?.connected) socket.emit('admin:kick',{nama}); catatAudit("KICK USER",nama,"kick dikirim via Socket.IO"); toast(`Perintah kick untuk "${nama}" dikirim!`,"kuning"); }
+async function hapusUser(idx) { const u=serverUsers[idx];if(!u||u.role==='admin')return;if(!confirm(`Yakin hapus user "${u.nama}"?`))return;try{await apiRequest(`/api/users/${u.id}`,{method:'DELETE'},true);catatAudit("HAPUS USER",u.nama,"dihapus dari PostgreSQL");await renderUsers();toast(`User "${u.nama}" dihapus!`,"merah");}catch(err){toast(`❌ ${err.message}`,"merah");} }
 
 // ========== GROUPS MANAGEMENT ==========
 function renderGroups() {
