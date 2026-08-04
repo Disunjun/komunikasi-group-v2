@@ -389,7 +389,73 @@
         ::-webkit-scrollbar-track { background: #0f172a; }
         ::-webkit-scrollbar-thumb { background: #475569; border-radius: 4px; }
         ::-webkit-scrollbar-thumb:hover { background: #64748b; }
-    </style>
+    
+        /* ========== FLOATING DEBUG BUTTON & PANEL ========== */
+        #debugFab {
+            position: fixed;
+            right: 14px;
+            bottom: 14px;
+            width: 46px;
+            height: 46px;
+            border-radius: 50%;
+            border: 1px solid #475569;
+            background: #0f172a;
+            color: #22c55e;
+            font-size: 19px;
+            font-weight: 800;
+            cursor: pointer;
+            z-index: 9998;
+            box-shadow: 0 6px 20px rgba(0,0,0,.45);
+            -webkit-tap-highlight-color: transparent;
+        }
+        #debugFab:active { transform: scale(.94); }
+        #debugPanel {
+            display: none;
+            position: fixed;
+            right: 12px;
+            bottom: 70px;
+            width: min(390px, calc(100vw - 24px));
+            max-height: 72vh;
+            overflow: auto;
+            z-index: 9999;
+            background: #0b1220;
+            color: #e2e8f0;
+            border: 1px solid #334155;
+            border-radius: 14px;
+            box-shadow: 0 12px 35px rgba(0,0,0,.55);
+            padding: 12px;
+            text-align: left;
+        }
+        #debugPanel.aktif { display: block; }
+        .debug-head {
+            display:flex;
+            align-items:center;
+            justify-content:space-between;
+            gap:8px;
+            margin-bottom:10px;
+        }
+        .debug-head strong { color:#22c55e; }
+        .debug-actions { display:flex; gap:6px; }
+        .debug-mini-btn {
+            border:1px solid #475569;
+            background:#1e293b;
+            color:#fff;
+            border-radius:8px;
+            padding:6px 9px;
+            font-size:12px;
+            cursor:pointer;
+        }
+        #debugOutput {
+            margin:0;
+            white-space:pre-wrap;
+            word-break:break-word;
+            font:12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            color:#cbd5e1;
+        }
+        .debug-ok { color:#22c55e; }
+        .debug-bad { color:#ef4444; }
+
+</style>
 <base target="_blank">
 </head>
 <body>
@@ -816,6 +882,21 @@
 
     <!-- Toast Container -->
     <div class="toast-container" id="toastContainer"></div>
+
+
+    <!-- ========== FLOATING DEBUG ========== -->
+    <button id="debugFab" type="button" onclick="toggleDebugPanel()" title="Debug koneksi">D</button>
+    <div id="debugPanel">
+        <div class="debug-head">
+            <strong>🛠 DEBUG KONEKSI</strong>
+            <div class="debug-actions">
+                <button class="debug-mini-btn" type="button" onclick="refreshDebugPanel()">↻ Refresh</button>
+                <button class="debug-mini-btn" type="button" onclick="copyDebugInfo()">📋 Copy</button>
+                <button class="debug-mini-btn" type="button" onclick="toggleDebugPanel()">✕</button>
+            </div>
+        </div>
+        <pre id="debugOutput">Tekan Refresh untuk membaca status perangkat.</pre>
+    </div>
 
 <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
 <script src="https://cdn.socket.io/4.8.1/socket.io.min.js"></script>
@@ -3278,6 +3359,121 @@ if(!ensureAdmin.find(p => p.nama === ADMIN_NAMA)) {
 loadTheme();
 
 // ========== SERVICE WORKER REGISTRATION (PWA) ==========
+
+// ========== ON-SCREEN DEBUG PANEL ==========
+function getDebugInfo() {
+    const peerOpen = !!(peer && peer.open);
+    const socketOpen = !!(socket && socket.connected);
+    const peerId = (peer && peer.id) ? peer.id : (peerIdSaya || "-");
+    const connectionRows = Object.entries(koneksi || {}).map(([id, conn]) => ({
+        id,
+        open: !!conn?.open,
+        type: conn?.type || "data"
+    }));
+    const sessionRows = Object.values(serverSessions || {}).map(s => ({
+        nama: s?.nama || "-",
+        peerId: s?.peerId || "-",
+        room: s?.room || s?.channel || "-",
+        socketId: s?.socketId || s?.id || "-"
+    }));
+
+    return {
+        waktu: new Date().toLocaleString(),
+        user: namaSaya || "-",
+        group: grupAktif || "-",
+        channel: channelAktif || "-",
+        online: navigator.onLine,
+        socketConnected: socketOpen,
+        socketId: socket?.id || "-",
+        peerOpen,
+        peerId,
+        peerIdSaya: peerIdSaya || "-",
+        micStream: !!streamSaya,
+        micTracks: streamSaya ? streamSaya.getAudioTracks().map(t => ({
+            enabled: t.enabled,
+            muted: t.muted,
+            readyState: t.readyState,
+            label: t.label || "-"
+        })) : [],
+        peerConnections: connectionRows,
+        serverSessions: sessionRows,
+        floorTalker: floorState?.currentTalker || "-",
+        floorStatus: myFloorStatus || "-"
+    };
+}
+
+function formatDebugInfo(d) {
+    const yesNo = v => v ? "YES" : "NO";
+    const lines = [
+        `TIME       : ${d.waktu}`,
+        `USER       : ${d.user}`,
+        `GROUP      : ${d.group}`,
+        `CHANNEL    : ${d.channel}`,
+        `ONLINE     : ${yesNo(d.online)}`,
+        `SOCKET     : ${d.socketConnected ? "CONNECTED" : "DISCONNECTED"}`,
+        `SOCKET ID  : ${d.socketId}`,
+        `PEER OPEN  : ${yesNo(d.peerOpen)}`,
+        `PEER ID    : ${d.peerId}`,
+        `PEER SERVER: ${d.peerIdSaya}`,
+        `MIC STREAM : ${yesNo(d.micStream)}`,
+        `FLOOR      : ${d.floorStatus} / ${d.floorTalker}`,
+        ``,
+        `MIC TRACKS (${d.micTracks.length})`
+    ];
+    if (!d.micTracks.length) lines.push("  - none");
+    d.micTracks.forEach((t,i) => lines.push(
+        `  ${i+1}. ${t.readyState} | enabled=${t.enabled} | muted=${t.muted} | ${t.label}`
+    ));
+
+    lines.push("", `PEER DATA CONNECTIONS (${d.peerConnections.length})`);
+    if (!d.peerConnections.length) lines.push("  - none");
+    d.peerConnections.forEach((c,i) => lines.push(
+        `  ${i+1}. ${c.open ? "OPEN" : "CLOSED"} | ${c.id}`
+    ));
+
+    lines.push("", `SERVER SESSIONS (${d.serverSessions.length})`);
+    if (!d.serverSessions.length) lines.push("  - none");
+    d.serverSessions.forEach((s,i) => lines.push(
+        `  ${i+1}. ${s.nama} | peer=${s.peerId} | room=${s.room}`
+    ));
+    return lines.join("\n");
+}
+
+function refreshDebugPanel() {
+    const out = document.getElementById("debugOutput");
+    if (!out) return;
+    try {
+        out.textContent = formatDebugInfo(getDebugInfo());
+    } catch (err) {
+        out.textContent = "DEBUG ERROR: " + (err?.message || err);
+    }
+}
+
+function toggleDebugPanel() {
+    const panel = document.getElementById("debugPanel");
+    if (!panel) return;
+    panel.classList.toggle("aktif");
+    if (panel.classList.contains("aktif")) refreshDebugPanel();
+}
+
+async function copyDebugInfo() {
+    const out = document.getElementById("debugOutput");
+    if (!out) return;
+    try {
+        await navigator.clipboard.writeText(out.textContent);
+        toast("Debug info disalin.", "hijau");
+    } catch (e) {
+        toast("Gagal menyalin debug.", "merah");
+    }
+}
+
+// Refresh otomatis hanya saat panel terbuka.
+setInterval(() => {
+    const panel = document.getElementById("debugPanel");
+    if (panel?.classList.contains("aktif")) refreshDebugPanel();
+}, 2000);
+
+
 if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
         navigator.serviceWorker.register('/sw.js')
