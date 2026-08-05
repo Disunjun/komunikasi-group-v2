@@ -888,7 +888,8 @@
 
 // ========== KONFIGURASI & STATE ==========
 const ADMIN_NAMA = "Didik Suntoro";
-const ADMIN_PASS = "D1d1kSunt0r0@#$";
+let adminToken = sessionStorage.getItem("kgAdminToken") || "";
+let adminTokenExpiresAt = sessionStorage.getItem("kgAdminTokenExpiresAt") || "";
 let namaSaya = "", channelAktif = "", grupAktif = "", peer = null, koneksi = {}, streamSaya = null;
 let micAktif = true;
 let daftarNamaTerhubung = [];
@@ -1062,19 +1063,7 @@ function migrasiData() {
         }));
         simpanData("logPengguna", pengguna);
     }
-    // Pastikan admin ada
-    if (!pengguna.find(p => p.nama === ADMIN_NAMA)) {
-        pengguna.push({
-            nama: ADMIN_NAMA,
-            sandi: ADMIN_PASS,
-            status: "aktif",
-            banned: false,
-            muted: false,
-            dibuatOleh: "system",
-            tanggalDibuat: new Date().toLocaleDateString('id-ID')
-        });
-        simpanData("logPengguna", pengguna);
-    }
+    // H2: Admin tidak lagi disimpan sebagai akun/password lokal. Autentikasi milik backend.
 
     // Migrasi grup
     let grup = ambilData("daftarGrup");
@@ -1141,10 +1130,19 @@ function tampilHalaman(id) {
     document.querySelectorAll(".halaman").forEach(h => h.classList.remove("aktif")); 
     document.getElementById(id).classList.add("aktif"); 
 }
-function keluarSistem() { 
+async function keluarSistem() {
+    const wasAdmin = !!adminToken;
+    if(wasAdmin) {
+        try { await apiRequest('/api/admin/logout', { method:'POST' }, true); } catch(_) {}
+    }
+    adminToken = "";
+    adminTokenExpiresAt = "";
+    sessionStorage.removeItem("kgAdminToken");
+    sessionStorage.removeItem("kgAdminTokenExpiresAt");
     namaSaya = "";
     if(monitoringInterval) clearInterval(monitoringInterval);
-    tampilHalaman("halamanMasuk"); 
+    if(socket) { try { socket.disconnect(); } catch(_) {} }
+    tampilHalaman("halamanMasuk");
     toast("Berhasil keluar", "hijau");
 }
 function kembaliKeMasuk() { tampilHalaman("halamanMasuk"); }
@@ -1153,12 +1151,22 @@ function kembaliKeMasuk() { tampilHalaman("halamanMasuk"); }
 async function apiRequest(path, options = {}, admin = false) {
     const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
     if(admin) {
-        headers["x-admin-name"] = ADMIN_NAMA;
-        headers["x-admin-password"] = ADMIN_PASS;
+        if(!adminToken) throw new Error("Session Admin tidak tersedia. Silakan login kembali.");
+        headers["Authorization"] = `Bearer ${adminToken}`;
     }
     const response = await fetch(`${REALTIME_SERVER_URL}${path}`, { ...options, headers });
     let data = {};
     try { data = await response.json(); } catch(_) {}
+    if(response.status === 401 && admin) {
+        adminToken = "";
+        adminTokenExpiresAt = "";
+        sessionStorage.removeItem("kgAdminToken");
+        sessionStorage.removeItem("kgAdminTokenExpiresAt");
+        namaSaya = "";
+        if(socket) { try { socket.disconnect(); } catch(_) {} }
+        tampilHalaman("halamanMasuk");
+        throw new Error(data.message || "Session Admin berakhir. Silakan login kembali.");
+    }
     if(!response.ok || data.ok === false) throw new Error(data.message || `HTTP ${response.status}`);
     return data;
 }
@@ -1182,14 +1190,29 @@ async function masukSistem() {
     const sandi = document.getElementById("loginPass").value;
     if(!nama || !sandi) return toast("❌ Isi Nama dan Kata Sandi!", "merah");
 
-    // Admin UI tetap memakai kredensial admin saat ini; user biasa wajib diverifikasi PostgreSQL.
-    if(nama === ADMIN_NAMA && sandi === ADMIN_PASS) {
-        namaSaya = nama;
-        tampilHalaman("halamanAdmin");
-        initAdminRealtimeSocket();
-        await renderAdminPanel();
-        toast("Selamat datang, Admin!", "hijau");
-        return;
+    // H2: UI tetap sama; password Admin diverifikasi hanya oleh backend.
+    if(nama === ADMIN_NAMA) {
+        try {
+            const data = await apiRequest('/api/admin/login', { method:'POST', body:JSON.stringify({nama,sandi}) });
+            adminToken = data.token;
+            adminTokenExpiresAt = data.expiresAt || "";
+            sessionStorage.setItem("kgAdminToken", adminToken);
+            sessionStorage.setItem("kgAdminTokenExpiresAt", adminTokenExpiresAt);
+            namaSaya = data.admin?.nama || nama;
+            tampilHalaman("halamanAdmin");
+            initAdminRealtimeSocket();
+            await renderAdminPanel();
+            toast("Selamat datang, Admin!", "hijau");
+            return;
+        } catch(err) {
+            adminToken = "";
+            adminTokenExpiresAt = "";
+            sessionStorage.removeItem("kgAdminToken");
+            sessionStorage.removeItem("kgAdminTokenExpiresAt");
+            namaSaya = "";
+            toast(`❌ ${err.message}`, "merah");
+            return;
+        }
     }
     try {
         const data = await apiRequest('/api/auth/login', { method:'POST', body:JSON.stringify({nama,sandi}) });
@@ -3783,20 +3806,7 @@ document.querySelectorAll('.modal-overlay').forEach(overlay => {
 });
 
 // ========== INIT ==========
-// Ensure admin exists
-const ensureAdmin = ambilData("logPengguna");
-if(!ensureAdmin.find(p => p.nama === ADMIN_NAMA)) {
-    ensureAdmin.push({
-        nama: ADMIN_NAMA,
-        sandi: ADMIN_PASS,
-        status: "aktif",
-        banned: false,
-        muted: false,
-        dibuatOleh: "system",
-        tanggalDibuat: new Date().toLocaleDateString('id-ID')
-    });
-    simpanData("logPengguna", ensureAdmin);
-}
+// H2: Kredensial Admin tidak disimpan di localStorage.
 
 // ========== THEME INIT ==========
 loadTheme();
@@ -3964,7 +3974,7 @@ setInterval(() => {
 
 // ========== DEBUG GLOBAL v2 ==========
 const DEBUG_UI_VERSION = "DEBUG-GLOBAL-v6-AUDIO-UNLOCK";
-const FRONTEND_BUILD = "2.6.3-G3.2-ADMIN-SOCKET";
+const FRONTEND_BUILD = "2.7.0-H2-ADMIN-TOKEN";
 
 function ensureGlobalDebugUI() {
     if (!document.body) return;
