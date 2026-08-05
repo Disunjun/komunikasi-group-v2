@@ -922,6 +922,8 @@ let monitoringInterval = null;
 const REALTIME_SERVER_URL = window.REALTIME_SERVER_URL || "https://komunikasi-group-v2-production.up.railway.app";
 let socket = null;
 let serverSessions = {};
+let serverAdminStats = null;
+let serverActivityLogs = [];
 let peerIdSaya = null;
 let realtimeConnected = false;
 
@@ -1336,6 +1338,22 @@ function eksporLog() {
     toast("Log berhasil diekspor!", "hijau");
 }
 
+
+// ========== STAGE G2: CENTRALIZED MONITORING + STATISTICS ==========
+function normalizeServerSessions(input) {
+    if(Array.isArray(input)) return Object.fromEntries(input.filter(Boolean).map(s => [s.nama || s.socketId, s]));
+    if(input && typeof input === "object") return input;
+    return {};
+}
+
+async function loadServerAdminStats() {
+    const data = await apiRequest('/api/admin/stats', { method:'GET' }, true);
+    serverAdminStats = data || null;
+    serverActivityLogs = Array.isArray(data?.activity) ? data.activity : [];
+    if(Array.isArray(data?.sessions)) serverSessions = normalizeServerSessions(data.sessions);
+    return data;
+}
+
 // ========== ADMIN PANEL - TABS ==========
 function pilihTab(tab) {
     adminTabAktif = tab;
@@ -1354,22 +1372,30 @@ function pilihTab(tab) {
 }
 
 function updateStats() {
-    const users = serverUsers;
     const grup = ambilData("daftarGrup");
-    const sessions = ambilData("onlineSessions");
-    const now = Date.now();
-    const onlineCount = Object.values(sessions).filter(s => now - s.timestamp < 60000).length;
-    const totalCh = grup.reduce((sum, g) => sum + g.channel.length, 0);
+    const totalCh = grup.reduce((sum, g) => sum + (Array.isArray(g.channel) ? g.channel.length : 0), 0);
+    const summary = serverAdminStats?.summary || {};
 
-    document.getElementById("statTotalUsers").textContent = users.length;
-    document.getElementById("statOnlineUsers").textContent = onlineCount;
-    document.getElementById("statTotalGroups").textContent = grup.length;
-    document.getElementById("statTotalChannels").textContent = totalCh;
+    document.getElementById("statTotalUsers").textContent =
+        Number.isFinite(Number(summary.totalUsers)) ? Number(summary.totalUsers) : serverUsers.length;
+    document.getElementById("statOnlineUsers").textContent =
+        Number.isFinite(Number(summary.onlineUsers)) ? Number(summary.onlineUsers) : Object.keys(normalizeServerSessions(serverSessions)).length;
+    document.getElementById("statTotalGroups").textContent =
+        Number.isFinite(Number(summary.totalGroups)) ? Number(summary.totalGroups) : grup.length;
+    document.getElementById("statTotalChannels").textContent =
+        Number.isFinite(Number(summary.totalChannels)) ? Number(summary.totalChannels) : totalCh;
 }
 
 
 // ========== STATISTIK CHARTS ==========
-function renderStatistik() {
+async function renderStatistik() {
+    try {
+        await loadServerAdminStats();
+        updateStats();
+    } catch(err) {
+        console.warn("[G2] Gagal load statistik server:", err);
+        toast(`❌ Statistik server: ${err.message}`, "merah", 5000);
+    }
     renderChartChannel();
     renderChartGroup();
     renderChartBulan();
@@ -1390,8 +1416,8 @@ function renderChartChannel() {
     const chartW = w - padding.left - padding.right;
     const chartH = h - padding.top - padding.bottom;
 
-    // Data: count unique users per channel from logAktivitas
-    const logs = ambilData("logAktivitas");
+    // PostgreSQL activity_logs: unique users per channel (12 bulan)
+    const logs = serverActivityLogs.filter(l => l.aksi === 'MASUK');
     const channelData = {};
     logs.forEach(l => {
         if(!channelData[l.channel]) channelData[l.channel] = new Set();
@@ -1469,19 +1495,11 @@ function renderChartGroup() {
     const chartW = w - padding.left - padding.right;
     const chartH = h - padding.top - padding.bottom;
 
-    // Data: count unique users per group from logAktivitas + channel→group mapping
-    const logs = ambilData("logAktivitas");
-    const grup = ambilData("daftarGrup");
-    const channelToGroup = {};
-    grup.forEach(g => {
-        g.channel.forEach(c => {
-            channelToGroup[c.nama] = g.nama;
-        });
-    });
-
+    // PostgreSQL activity_logs: unique users per group (12 bulan)
+    const logs = serverActivityLogs.filter(l => l.aksi === 'MASUK');
     const groupData = {};
     logs.forEach(l => {
-        const gName = channelToGroup[l.channel] || "Lainnya";
+        const gName = l.group || "Lainnya";
         if(!groupData[gName]) groupData[gName] = new Set();
         groupData[gName].add(l.nama);
     });
@@ -1567,18 +1585,16 @@ function renderChartBulan() {
         });
     }
 
-    // Data: count unique users per month
-    const logs = ambilData("logAktivitas");
+    // PostgreSQL activity_logs: unique users per month
+    const logs = serverActivityLogs.filter(l => l.aksi === 'MASUK');
     const monthData = {};
     months.forEach(m => monthData[m.key] = new Set());
 
     logs.forEach(l => {
-        // Parse tgl format "DD/MM/YYYY" → "M/YYYY"
-        const parts = l.tgl.split('/');
-        if(parts.length === 3) {
-            const key = parseInt(parts[1]) + "/" + parts[2];
-            if(monthData[key]) monthData[key].add(l.nama);
-        }
+        const d = new Date(l.createdAt);
+        if(Number.isNaN(d.getTime())) return;
+        const key = (d.getMonth()+1) + "/" + d.getFullYear();
+        if(monthData[key]) monthData[key].add(l.nama);
     });
 
     const labels = months.map(m => m.label);
@@ -2028,7 +2044,7 @@ function hapusChannelAdmin(gi, ci) {
 function refreshMonitoring() {
     const container = document.getElementById("monitoringTree");
     const grup = ambilData("daftarGrup");
-    const sessions = Object.keys(serverSessions).length ? serverSessions : ambilData("onlineSessions");
+    const sessions = normalizeServerSessions(serverSessions);
     const now = Date.now();
     const kicked = ambilData("kickedUsers");
 
@@ -2159,7 +2175,11 @@ function initRealtimeSocket() {
             console.warn("[AUDIT] Realtime parse gagal:", err);
         }
     });
-    socket.on("presence:update", sessions => { serverSessions = sessions || {}; refreshMonitoring(); });
+    socket.on("presence:update", sessions => {
+        serverSessions = normalizeServerSessions(sessions);
+        if(adminTabAktif === 'monitoring') refreshMonitoring();
+        updateStats();
+    });
     socket.on("room:error", e => toast("❌ " + (e?.message || "Gagal masuk room"), "merah", 6000));
     socket.on("admin:kick", () => { toast("Anda telah di-kick oleh admin!", "merah", 5000); keluarChannel(); });
     socket.on("floor:event", receiveFloorState);
@@ -3805,7 +3825,7 @@ setInterval(() => {
 
 // ========== DEBUG GLOBAL v2 ==========
 const DEBUG_UI_VERSION = "DEBUG-GLOBAL-v6-AUDIO-UNLOCK";
-const FRONTEND_BUILD = "2.5.0-E2-AUDIT-SYNC";
+const FRONTEND_BUILD = "2.6.0-G2-MONITORING-STATS-SYNC";
 
 function ensureGlobalDebugUI() {
     if (!document.body) return;
