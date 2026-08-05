@@ -15,6 +15,8 @@ const PORT = Number(process.env.PORT || 3000);
 const FRONTEND_ORIGINS = (process.env.FRONTEND_ORIGINS || '*').split(',').map(s => s.trim()).filter(Boolean);
 const ADMIN_NAME = process.env.ADMIN_NAME || 'Didik Suntoro';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'D1d1kSunt0r0@#$';
+const ADMIN_SESSION_TTL_MS = Math.max(5 * 60 * 1000, Number(process.env.ADMIN_SESSION_TTL_MS || 30 * 60 * 1000));
+const adminSessions = new Map(); // tokenHash -> {adminName, expiresAt, createdAt}
 
 const corsOrigin = FRONTEND_ORIGINS.includes('*') ? true : FRONTEND_ORIGINS;
 const io = new Server(server, { cors: { origin: corsOrigin, methods: ['GET','POST','PATCH','DELETE'] }, transports: ['websocket','polling'] });
@@ -44,8 +46,51 @@ function publicUser(row) {
   return { id: row.id, nama: row.username, role: row.role || 'user', status: row.active ? 'aktif' : 'nonaktif', banned: !!row.banned, muted: !!row.muted, dibuatOleh: row.created_by || 'system', tanggalDibuat: row.created_at ? new Date(row.created_at).toLocaleDateString('id-ID') : '-' };
 }
 function requireDb(res) { if (db) return true; res.status(503).json({ok:false,message:'Database belum tersedia'}); return false; }
-function isAdminRequest(req) { return req.get('x-admin-name') === ADMIN_NAME && req.get('x-admin-password') === ADMIN_PASSWORD; }
-function requireAdmin(req,res,next) { if (!isAdminRequest(req)) return res.status(401).json({ok:false,message:'Admin tidak terautentikasi'}); next(); }
+function hashAdminToken(token) {
+  return crypto.createHash('sha256').update(String(token || '')).digest('hex');
+}
+function createAdminSession(adminName=ADMIN_NAME) {
+  const token = crypto.randomBytes(32).toString('base64url');
+  const tokenHash = hashAdminToken(token);
+  const now = Date.now();
+  const expiresAt = now + ADMIN_SESSION_TTL_MS;
+  adminSessions.set(tokenHash, { adminName, createdAt:now, expiresAt });
+  return { token, expiresAt };
+}
+function getBearerToken(req) {
+  const h = String(req.get('authorization') || '');
+  return h.toLowerCase().startsWith('bearer ') ? h.slice(7).trim() : '';
+}
+function getAdminSession(req) {
+  const token = getBearerToken(req);
+  if(!token) return null;
+  const tokenHash = hashAdminToken(token);
+  const s = adminSessions.get(tokenHash);
+  if(!s) return null;
+  if(s.expiresAt <= Date.now()) {
+    adminSessions.delete(tokenHash);
+    return null;
+  }
+  return { ...s, tokenHash };
+}
+function isLegacyAdminRequest(req) {
+  return req.get('x-admin-name') === ADMIN_NAME && req.get('x-admin-password') === ADMIN_PASSWORD;
+}
+function requireAdmin(req,res,next) {
+  const session = getAdminSession(req);
+  if(session) {
+    req.adminSession = session;
+    return next();
+  }
+
+  // H1 migration fallback. Remove in H3 after G3.2 frontend has moved to Bearer token.
+  if(isLegacyAdminRequest(req)) {
+    req.adminSession = { adminName:ADMIN_NAME, legacy:true, expiresAt:null };
+    return next();
+  }
+
+  return res.status(401).json({ok:false,message:'Session Admin tidak valid atau sudah berakhir.'});
+}
 
 function publicAudit(row) {
   return {
@@ -148,6 +193,90 @@ async function initializeDatabase() {
   } catch(e) { console.error('[DB] Database initialization ERROR:', e.message); }
 }
 
+// ===== STAGE H1: SHORT-LIVED ADMIN SESSION TOKEN =====
+const adminLoginAttempts = new Map();
+function loginAttemptKey(req) {
+  return String(req.ip || req.socket?.remoteAddress || 'unknown');
+}
+function checkAdminLoginRate(req) {
+  const key = loginAttemptKey(req);
+  const now = Date.now();
+  const state = adminLoginAttempts.get(key);
+  if(!state || state.resetAt <= now) {
+    adminLoginAttempts.set(key, {count:0, resetAt:now + 10*60*1000});
+    return {ok:true,key};
+  }
+  if(state.count >= 5) return {ok:false,key,retryAfterMs:state.resetAt-now};
+  return {ok:true,key};
+}
+function recordAdminLoginFailure(key) {
+  const state = adminLoginAttempts.get(key) || {count:0, resetAt:Date.now()+10*60*1000};
+  state.count++;
+  adminLoginAttempts.set(key,state);
+}
+function clearAdminLoginFailures(key) { adminLoginAttempts.delete(key); }
+
+app.post('/api/admin/login', async (req,res) => {
+  const rate = checkAdminLoginRate(req);
+  if(!rate.ok) {
+    res.set('Retry-After', String(Math.ceil(rate.retryAfterMs/1000)));
+    return res.status(429).json({ok:false,message:'Terlalu banyak percobaan login Admin. Coba lagi beberapa menit.'});
+  }
+
+  const nama = String(req.body?.nama || '').trim();
+  const sandi = String(req.body?.sandi || '');
+
+  // Constant-time-ish verification path through password hash in PostgreSQL when available.
+  try {
+    let valid = false;
+    if(db) {
+      const r = await db.query(`SELECT username,password_hash,role,active,banned FROM users WHERE LOWER(username)=LOWER($1) LIMIT 1`, [nama]);
+      const u = r.rows[0];
+      if(u && u.role === 'admin' && u.active && !u.banned) {
+        valid = await verifyPassword(sandi, u.password_hash);
+      }
+    } else {
+      valid = nama === ADMIN_NAME && sandi === ADMIN_PASSWORD;
+    }
+
+    if(!valid) {
+      recordAdminLoginFailure(rate.key);
+      await writeAudit(nama || 'unknown','LOGIN ADMIN GAGAL','admin',`ip=${loginAttemptKey(req)}`);
+      return res.status(401).json({ok:false,message:'ID atau password Admin salah.'});
+    }
+
+    clearAdminLoginFailures(rate.key);
+    const session = createAdminSession(nama);
+    await writeAudit(nama,'LOGIN ADMIN','admin',`session TTL=${Math.round(ADMIN_SESSION_TTL_MS/60000)} menit`);
+    return res.json({
+      ok:true,
+      admin:{nama},
+      token:session.token,
+      expiresAt:new Date(session.expiresAt).toISOString(),
+      expiresInSeconds:Math.floor(ADMIN_SESSION_TTL_MS/1000)
+    });
+  } catch(e) {
+    console.error('[ADMIN AUTH] LOGIN ERROR:', e.message);
+    return res.status(500).json({ok:false,message:'Login Admin gagal.'});
+  }
+});
+
+app.get('/api/admin/session', requireAdmin, (req,res) => {
+  res.json({
+    ok:true,
+    admin:{nama:req.adminSession?.adminName || ADMIN_NAME},
+    legacy:!!req.adminSession?.legacy,
+    expiresAt:req.adminSession?.expiresAt ? new Date(req.adminSession.expiresAt).toISOString() : null
+  });
+});
+
+app.post('/api/admin/logout', requireAdmin, async (req,res) => {
+  const token = getBearerToken(req);
+  if(token) adminSessions.delete(hashAdminToken(token));
+  await writeAudit(req.adminSession?.adminName || ADMIN_NAME,'LOGOUT ADMIN','admin','Session dicabut');
+  res.json({ok:true});
+});
+
 // ===== USER / AUTH API =====
 app.post('/api/auth/register', async (req,res) => {
   if (!requireDb(res)) return;
@@ -184,7 +313,7 @@ async function savePresence(s){ if(!db||!s)return; try{await db.query(`INSERT IN
 async function removePresence(id){if(!db)return;try{await db.query(`DELETE FROM online_sessions WHERE socket_id=$1`,[id]);}catch(e){console.error('[DB] removePresence:',e.message);}}
 function emitPresence(){io.emit('presence:update',publicSessions());}
 
-app.get('/health',async(req,res)=>{let database='disabled';if(db){try{await db.query('SELECT 1');database='connected';}catch{database='error';}}res.json({ok:true,service:'komunikasi-group-realtime',version:'2.6.0-G1',database,time:new Date().toISOString(),users:sessions.size});});
+app.get('/health',async(req,res)=>{let database='disabled';if(db){try{await db.query('SELECT 1');database='connected';}catch{database='error';}}res.json({ok:true,service:'komunikasi-group-realtime',version:'2.7.0-H1-ADMIN-SESSION',database,time:new Date().toISOString(),users:sessions.size});});
 
 // ===== ADMIN SYNC STAGE B: PostgreSQL Group/Channel API =====
 app.get('/api/config/groups', async (req,res) => {
@@ -425,7 +554,7 @@ app.get('/api/turn-credentials', async (req, res) => {
 app.get('/api/db-test',async(req,res)=>{if(!requireDb(res))return;try{const r=await db.query(`SELECT NOW() AS server_time,current_database() AS database_name`);res.json({ok:true,database:'connected',result:r.rows[0]});}catch(e){res.status(500).json({ok:false,error:e.message});}});
 
 io.on('connection',socket=>{
-  console.log('[SOCKET] Connected:',socket.id); socket.emit('server:ready',{version:'2.6.0-G1',transport:socket.conn.transport.name});
+  console.log('[SOCKET] Connected:',socket.id); socket.emit('server:ready',{version:'2.7.0-H1-ADMIN-SESSION',transport:socket.conn.transport.name});
   socket.on('room:join',async payload=>{try{
     const nama=String(payload?.nama||'').trim(),group=String(payload?.group||'').trim(),channel=String(payload?.channel||'').trim(),peerId=String(payload?.peerId||'').trim(),maxUsers=Number(payload?.maxUsers||0);
     if(!nama||!group||!channel||!peerId)return socket.emit('room:error',{message:'Data room tidak lengkap.'});
@@ -456,7 +585,12 @@ io.on('connection',socket=>{
   socket.on('admin:kick',async({nama})=>{if(!nama)return;kicked.set(nama,Date.now()+300000);await writeAudit(ADMIN_NAME,'KICK USER',nama,'User di-kick selama 5 menit');for(const s of sessions.values())if(s.nama===nama){io.to(s.socketId).emit('admin:kick',{nama,expiresAt:kicked.get(nama)});io.sockets.sockets.get(s.socketId)?.disconnect(true);}});
   socket.on('disconnect',async reason=>{const s=sessions.get(socket.id);console.log('[SOCKET] Disconnect:',socket.id,reason);if(!s)return;rooms.get(s.room)?.delete(socket.id);if(rooms.get(s.room)?.size===0)rooms.delete(s.room);sessions.delete(socket.id);await removePresence(socket.id);await writeActivity(s.nama,s.group,s.channel,'KELUAR');if(s.room)io.to(s.room).emit('room:users',roomUsers(s.room));emitPresence();});
 });
+setInterval(()=>{
+  const now=Date.now();
+  for(const [tokenHash,s] of adminSessions) if(s.expiresAt<=now) adminSessions.delete(tokenHash);
+},60000);
+
 setInterval(async()=>{const cutoff=Date.now()-65000;for(const[id,s]of sessions)if(s.timestamp<cutoff){rooms.get(s.room)?.delete(id);sessions.delete(id);await removePresence(id);await writeActivity(s.nama,s.group,s.channel,'KELUAR');}emitPresence();},15000);
 
-async function startServer(){console.log('========================================');console.log(' Komunikasi Group V2 Backend');console.log(' Version 2.6.0-G1');console.log('========================================');await testDatabase();await initializeDatabase();server.listen(PORT,()=>{console.log(`[SERVER] Listening on port ${PORT}`);console.log(`[SERVER] PostgreSQL: ${db?'ENABLED':'DISABLED'}`);});}
+async function startServer(){console.log('========================================');console.log(' Komunikasi Group V2 Backend');console.log(' Version 2.7.0-H1-ADMIN-SESSION');console.log('========================================');await testDatabase();await initializeDatabase();server.listen(PORT,()=>{console.log(`[SERVER] Listening on port ${PORT}`);console.log(`[SERVER] PostgreSQL: ${db?'ENABLED':'DISABLED'}`);});}
 startServer();
