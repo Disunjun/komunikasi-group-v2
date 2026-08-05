@@ -2218,7 +2218,7 @@ function sinkronkanPeerUsers(users) {
                 // Ini menghindari call berulang setiap room:users saat data peer belum siap.
                 try {
                     const call = peer.call(targetPeerId, streamSaya, { metadata:{nama:namaSaya} });
-                    if(call) pasangSuara(call);
+                    if(call) { debugTrackMediaCall(call, 'OUT'); pasangSuara(call); }
                 } catch(e) {
                     console.warn('[PEER] Media call failed:', u.nama, targetPeerId, e);
                 }
@@ -2817,6 +2817,7 @@ function setupPeerEvents() {
     });
 
     peer.on("call", panggilan => {
+        debugTrackMediaCall(panggilan, "IN");
         panggilan.answer(streamSaya);
         pasangSuara(panggilan);
         perbaruiStatusTerhubung();
@@ -3025,7 +3026,19 @@ function pasangSuara(panggilan) {
         el.srcObject = suaraOrang;
         el.autoplay = true;
         el.id = "audio-" + Math.random().toString(36).substr(2, 9);
+        el.dataset.debugPlay = "pending";
         document.body.appendChild(el);
+        // Diagnostic: explicitly ask browser to play and record autoplay rejection.
+        // This does not alter signaling/call logic.
+        const playPromise = el.play();
+        if(playPromise && typeof playPromise.then === "function") {
+            playPromise
+                .then(() => { el.dataset.debugPlay = "ok"; })
+                .catch(err => {
+                    el.dataset.debugPlay = `blocked:${err?.name || "Error"}:${err?.message || ""}`;
+                    console.warn("[AUDIO] play blocked:", err);
+                });
+        }
 
         // If recording is active, connect this incoming stream to the mixer
         if(isRecording && audioContext && destinationNode) {
@@ -3035,6 +3048,96 @@ function pasangSuara(panggilan) {
             } catch(e) { console.log("Failed to connect incoming stream to recorder", e); }
         }
     });
+}
+
+
+
+// ========== DEBUG v5: WEBRTC MEDIA / ICE / AUDIO OUTPUT ==========
+const debugMediaCalls = new Map();
+
+function debugTrackMediaCall(call, direction = "unknown") {
+    if(!call) return;
+    const key = `${direction}:${call.peer || "unknown"}:${Date.now()}:${Math.random()}`;
+    const row = {
+        key,
+        peer: call.peer || "-",
+        direction,
+        createdAt: new Date(),
+        streamReceived: false,
+        streamTracks: [],
+        closed: false,
+        error: "-",
+        call
+    };
+    debugMediaCalls.set(key, row);
+
+    try {
+        call.on("stream", stream => {
+            row.streamReceived = true;
+            row.streamTracks = stream.getAudioTracks().map(t => ({
+                readyState:t.readyState,
+                enabled:t.enabled,
+                muted:t.muted,
+                label:t.label || "-"
+            }));
+        });
+        call.on("close", () => { row.closed = true; });
+        call.on("error", err => { row.error = err?.type || err?.message || String(err); });
+    } catch(_) {}
+
+    // Keep diagnostics bounded.
+    if(debugMediaCalls.size > 30) {
+        const first = debugMediaCalls.keys().next().value;
+        debugMediaCalls.delete(first);
+    }
+}
+
+function debugGetPeerConnection(call) {
+    return call?.peerConnection || call?._negotiator?.peerConnection || null;
+}
+
+function debugMediaSnapshot() {
+    const calls = [];
+    for(const row of debugMediaCalls.values()) {
+        const pc = debugGetPeerConnection(row.call);
+        const receivers = pc?.getReceivers ? pc.getReceivers() : [];
+        const remoteAudioTracks = receivers
+            .map(r => r.track)
+            .filter(t => t && t.kind === "audio")
+            .map(t => ({readyState:t.readyState, enabled:t.enabled, muted:t.muted, label:t.label || "-"}));
+
+        calls.push({
+            peer:row.peer,
+            direction:row.direction,
+            ageSec:Math.round((Date.now()-row.createdAt.getTime())/1000),
+            streamReceived:row.streamReceived,
+            closed:row.closed,
+            error:row.error,
+            connectionState:pc?.connectionState || "-",
+            iceConnectionState:pc?.iceConnectionState || "-",
+            iceGatheringState:pc?.iceGatheringState || "-",
+            signalingState:pc?.signalingState || "-",
+            remoteAudioTracks
+        });
+    }
+
+    const audios = [...document.querySelectorAll("audio")].map((a,i) => {
+        const tracks = a.srcObject?.getAudioTracks ? a.srcObject.getAudioTracks() : [];
+        return {
+            index:i+1,
+            id:a.id || "-",
+            paused:a.paused,
+            muted:a.muted,
+            autoplay:a.autoplay,
+            volume:a.volume,
+            readyState:a.readyState,
+            networkState:a.networkState,
+            currentTime:Number.isFinite(a.currentTime) ? a.currentTime.toFixed(2) : "-",
+            tracks:tracks.map(t => ({readyState:t.readyState, enabled:t.enabled, muted:t.muted, label:t.label || "-"}))
+        };
+    });
+
+    return {calls,audios};
 }
 
 
@@ -3103,7 +3206,7 @@ function pttDown(e) {
         // Call target untuk audio whisper
         if(peer) {
             const call = peer.call(targetPeerId, streamSaya);
-            if(call) pasangSuara(call);
+            if(call) { debugTrackMediaCall(call, 'OUT'); pasangSuara(call); }
         }
         updateHeartbeat();
         startPttTimeout();
@@ -3495,7 +3598,8 @@ function getDebugInfo() {
         turnStatus: turnConfigStatus,
         turnServers: turnIceServers.length,
         turnError: turnConfigError || "-",
-        turnLoadedAt: turnLoadedAt ? turnLoadedAt.toLocaleString() : "-"
+        turnLoadedAt: turnLoadedAt ? turnLoadedAt.toLocaleString() : "-",
+        mediaDebug: debugMediaSnapshot()
     };
 }
 
@@ -3532,6 +3636,32 @@ function formatDebugInfo(d) {
     d.peerConnections.forEach((c,i) => lines.push(
         `  ${i+1}. ${c.open ? "OPEN" : "CLOSED"} | ${c.id}`
     ));
+
+    const media = d.mediaDebug || {calls:[],audios:[]};
+    lines.push("", `MEDIA CONNECTIONS (${media.calls.length})`);
+    if(!media.calls.length) lines.push("  - none");
+    media.calls.forEach((c,i) => {
+        lines.push(`  ${i+1}. ${c.direction} | peer=${c.peer} | age=${c.ageSec}s`);
+        lines.push(`     PC=${c.connectionState} | ICE=${c.iceConnectionState} | GATHER=${c.iceGatheringState} | SIGNAL=${c.signalingState}`);
+        lines.push(`     STREAM=${c.streamReceived ? "YES" : "NO"} | CLOSED=${c.closed} | ERROR=${c.error}`);
+        if(!c.remoteAudioTracks.length) lines.push("     REMOTE AUDIO TRACK: none");
+        c.remoteAudioTracks.forEach((t,j) => lines.push(
+            `     TRACK ${j+1}: ${t.readyState} | enabled=${t.enabled} | muted=${t.muted} | ${t.label}`
+        ));
+    });
+
+    lines.push("", `AUDIO OUTPUT (${media.audios.length})`);
+    if(!media.audios.length) lines.push("  - none");
+    media.audios.forEach(a => {
+        const el = document.getElementById(a.id);
+        const playState = el?.dataset?.debugPlay || "-";
+        lines.push(`  ${a.index}. ${a.id} | paused=${a.paused} | muted=${a.muted} | autoplay=${a.autoplay} | volume=${a.volume}`);
+        lines.push(`     ready=${a.readyState} | network=${a.networkState} | time=${a.currentTime} | play=${playState}`);
+        if(!a.tracks.length) lines.push("     AUDIO TRACK: none");
+        a.tracks.forEach((t,j) => lines.push(
+            `     TRACK ${j+1}: ${t.readyState} | enabled=${t.enabled} | muted=${t.muted} | ${t.label}`
+        ));
+    });
 
     lines.push("", `SERVER SESSIONS (${d.serverSessions.length})`);
     if (!d.serverSessions.length) lines.push("  - none");
@@ -3578,7 +3708,7 @@ setInterval(() => {
 
 
 // ========== DEBUG GLOBAL v2 ==========
-const DEBUG_UI_VERSION = "DEBUG-GLOBAL-v4-DBSYNC-CLEAN";
+const DEBUG_UI_VERSION = "DEBUG-GLOBAL-v5-WEBRTC-MEDIA";
 
 function ensureGlobalDebugUI() {
     if (!document.body) return;
