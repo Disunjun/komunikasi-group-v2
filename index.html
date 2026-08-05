@@ -888,6 +888,7 @@
 
 // ========== KONFIGURASI & STATE ==========
 const ADMIN_NAMA = "Didik Suntoro";
+let userLoginPassword = "";
 let adminToken = sessionStorage.getItem("kgAdminToken") || "";
 let adminTokenExpiresAt = sessionStorage.getItem("kgAdminTokenExpiresAt") || "";
 let namaSaya = "", channelAktif = "", grupAktif = "", peer = null, koneksi = {}, streamSaya = null;
@@ -1140,6 +1141,7 @@ async function keluarSistem() {
     sessionStorage.removeItem("kgAdminToken");
     sessionStorage.removeItem("kgAdminTokenExpiresAt");
     namaSaya = "";
+    userLoginPassword = "";
     if(monitoringInterval) clearInterval(monitoringInterval);
     if(socket) { try { socket.disconnect(); } catch(_) {} }
     tampilHalaman("halamanMasuk");
@@ -1216,6 +1218,7 @@ async function masukSistem() {
     }
     try {
         const data = await apiRequest('/api/auth/login', { method:'POST', body:JSON.stringify({nama,sandi}) });
+        userLoginPassword = sandi; // memory-only; tidak disimpan ke browser storage
         namaSaya = data.user.nama;
         tampilHalaman("halamanDaftar");
         await muatGroupsPostgreSQL(true);
@@ -2845,11 +2848,14 @@ async function masukChannel(namaGrup, namaChannel) {
         userData = { nama: ADMIN_NAMA, role: "admin", status: "aktif", banned: false, muted: false };
     } else {
         try {
-            const dataUsers = await apiRequest('/api/users', { method:'GET' }, true);
-            const daftarUsers = Array.isArray(dataUsers.users) ? dataUsers.users : [];
-            userData = daftarUsers.find(u => String(u.nama || '').trim().toLowerCase() === String(namaSaya || '').trim().toLowerCase());
+            if(!userLoginPassword) throw new Error("Session user tidak tersedia. Silakan login kembali.");
+            const dataUser = await apiRequest('/api/auth/me', {
+                method:'POST',
+                body:JSON.stringify({nama:namaSaya,sandi:userLoginPassword})
+            });
+            userData = dataUser.user || null;
         } catch(err) {
-            console.error('[CHANNEL] Gagal mengambil user PostgreSQL:', err);
+            console.error('[CHANNEL] Gagal memverifikasi user PostgreSQL:', err);
             return toast(`❌ Gagal memverifikasi user: ${err.message}`, "merah");
         }
     }
@@ -3974,7 +3980,7 @@ setInterval(() => {
 
 // ========== DEBUG GLOBAL v2 ==========
 const DEBUG_UI_VERSION = "DEBUG-GLOBAL-v6-AUDIO-UNLOCK";
-const FRONTEND_BUILD = "2.7.0-H2-ADMIN-TOKEN";
+const FRONTEND_BUILD = "2.7.2-H3.1-DUAL-AUTH";
 
 function ensureGlobalDebugUI() {
     if (!document.body) return;
