@@ -1,80 +1,87 @@
-const CACHE_NAME = 'komgrup-v1';
-const STATIC_ASSETS = [
-  '/',
-  '/index.html',
+// Komunikasi Group V2 - Service Worker Auto Update
+// HTML/navigation: NETWORK FIRST so every deploy gets the newest app.
+// Static assets: stale-while-revalidate for speed + offline fallback.
+
+const CACHE_NAME = 'komgrup-auto-v2';
+const APP_SHELL = [
   '/manifest.json',
   '/icon-192.png',
   '/icon-512.png'
 ];
 
-// Install: cache static assets
 self.addEventListener('install', event => {
-  event.waitUntil(
-    caches.open(CACHE_NAME).then(cache => {
-      return cache.addAll(STATIC_ASSETS);
-    }).catch(err => {
-      console.log('[SW] Cache failed:', err);
-    })
-  );
   self.skipWaiting();
-});
-
-// Activate: clean old caches
-self.addEventListener('activate', event => {
   event.waitUntil(
-    caches.keys().then(cacheNames => {
-      return Promise.all(
-        cacheNames
-          .filter(name => name !== CACHE_NAME)
-          .map(name => caches.delete(name))
-      );
-    })
+    caches.open(CACHE_NAME)
+      .then(cache => cache.addAll(APP_SHELL))
+      .catch(err => console.warn('[SW] Precache warning:', err))
   );
-  self.clients.claim();
 });
 
-// Fetch: cache-first strategy for static, network-first for API
-self.addEventListener('fetch', event => {
-  const { request } = event;
-  const url = new URL(request.url);
+self.addEventListener('activate', event => {
+  event.waitUntil((async () => {
+    const names = await caches.keys();
+    await Promise.all(
+      names.filter(name => name !== CACHE_NAME).map(name => caches.delete(name))
+    );
+    await self.clients.claim();
+  })());
+});
 
-  // Skip non-GET requests
+self.addEventListener('message', event => {
+  if (event.data?.type === 'SKIP_WAITING') self.skipWaiting();
+});
+
+self.addEventListener('fetch', event => {
+  const request = event.request;
   if (request.method !== 'GET') return;
 
-  // Skip chrome-extension and other non-http schemes
+  const url = new URL(request.url);
   if (!url.protocol.startsWith('http')) return;
 
-  // For static assets: cache first
-  if (STATIC_ASSETS.includes(url.pathname)) {
-    event.respondWith(
-      caches.match(request).then(cached => {
-        return cached || fetch(request).then(response => {
-          return caches.open(CACHE_NAME).then(cache => {
-            cache.put(request, response.clone());
-            return response;
-          });
-        });
-      })
-    );
+  // Never cache Railway/API traffic.
+  if (url.origin !== self.location.origin || url.pathname.startsWith('/api/')) {
     return;
   }
 
-  // For everything else: network first, fallback to cache
-  event.respondWith(
-    fetch(request).then(response => {
-      return caches.open(CACHE_NAME).then(cache => {
-        cache.put(request, response.clone());
-        return response;
-      });
-    }).catch(() => {
-      return caches.match(request).then(cached => {
-        if (cached) return cached;
-        // Return offline fallback for navigation
-        if (request.mode === 'navigate') {
-          return caches.match('/index.html');
+  // IMPORTANT: index.html and browser navigations always try network first.
+  // This prevents an old cached index.html from surviving a new Netlify deploy.
+  if (request.mode === 'navigate' || url.pathname === '/' || url.pathname === '/index.html') {
+    event.respondWith((async () => {
+      try {
+        const fresh = await fetch(request, { cache: 'no-store' });
+        if (fresh && fresh.ok) {
+          const cache = await caches.open(CACHE_NAME);
+          await cache.put('/index.html', fresh.clone());
         }
-        return new Response('Offline', { status: 503 });
-      });
-    })
-  );
+        return fresh;
+      } catch (err) {
+        return (await caches.match('/index.html')) ||
+               new Response('Aplikasi sedang offline.', {
+                 status: 503,
+                 headers: {'Content-Type':'text/plain; charset=utf-8'}
+               });
+      }
+    })());
+    return;
+  }
+
+  // Other same-origin static files: return cache quickly, refresh in background.
+  event.respondWith((async () => {
+    const cached = await caches.match(request);
+    const network = fetch(request).then(async response => {
+      if (response && response.ok) {
+        const cache = await caches.open(CACHE_NAME);
+        await cache.put(request, response.clone());
+      }
+      return response;
+    }).catch(() => null);
+
+    if (cached) {
+      event.waitUntil(network);
+      return cached;
+    }
+
+    return (await network) || new Response('Offline', {status:503});
+  })());
 });
