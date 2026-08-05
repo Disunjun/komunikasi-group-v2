@@ -102,12 +102,65 @@ async function savePresence(s){ if(!db||!s)return; try{await db.query(`INSERT IN
 async function removePresence(id){if(!db)return;try{await db.query(`DELETE FROM online_sessions WHERE socket_id=$1`,[id]);}catch(e){console.error('[DB] removePresence:',e.message);}}
 function emitPresence(){io.emit('presence:update',publicSessions());}
 
-app.get('/health',async(req,res)=>{let database='disabled';if(db){try{await db.query('SELECT 1');database='connected';}catch{database='error';}}res.json({ok:true,service:'komunikasi-group-realtime',version:'2.2.0',database,time:new Date().toISOString(),users:sessions.size});});
+app.get('/health',async(req,res)=>{let database='disabled';if(db){try{await db.query('SELECT 1');database='connected';}catch{database='error';}}res.json({ok:true,service:'komunikasi-group-realtime',version:'2.3.0',database,time:new Date().toISOString(),users:sessions.size});});
 app.get('/api/presence',(req,res)=>res.json({ok:true,sessions:publicSessions()}));
+
+// ===== CLOUDFLARE REALTIME TURN =====
+// TURN Key ID dan API Token tetap hanya di Railway Variables.
+app.get('/api/turn-credentials', async (req, res) => {
+  const keyId = process.env.CLOUDFLARE_TURN_KEY_ID;
+  const apiToken = process.env.CLOUDFLARE_TURN_API_TOKEN;
+
+  if (!keyId || !apiToken) {
+    console.error('[TURN] Cloudflare TURN variables belum lengkap.');
+    return res.status(503).json({ ok:false, message:'Cloudflare TURN belum dikonfigurasi di server.' });
+  }
+
+  try {
+    const cfResponse = await fetch(
+      `https://rtc.live.cloudflare.com/v1/turn/keys/${encodeURIComponent(keyId)}/credentials/generate-ice-servers`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiToken}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ ttl: 86400 })
+      }
+    );
+
+    const data = await cfResponse.json().catch(() => null);
+
+    if (!cfResponse.ok) {
+      console.error('[TURN] Cloudflare request gagal:', cfResponse.status, data);
+      return res.status(502).json({
+        ok:false,
+        message:'Gagal memperoleh TURN credentials dari Cloudflare.',
+        status:cfResponse.status
+      });
+    }
+
+    let iceServers = [];
+    if (Array.isArray(data?.iceServers)) iceServers = data.iceServers;
+    else if (data && (data.urls || data.url)) iceServers = [data];
+
+    if (!iceServers.length) {
+      console.error('[TURN] Respons Cloudflare tidak berisi ICE servers.');
+      return res.status(502).json({ ok:false, message:'Respons TURN Cloudflare tidak valid.' });
+    }
+
+    console.log('[TURN] Temporary ICE credentials generated.');
+    res.json({ ok:true, ttl:86400, iceServers });
+  } catch (e) {
+    console.error('[TURN] ERROR:', e.message);
+    res.status(502).json({ ok:false, message:'Tidak dapat menghubungi Cloudflare TURN.' });
+  }
+});
+
 app.get('/api/db-test',async(req,res)=>{if(!requireDb(res))return;try{const r=await db.query(`SELECT NOW() AS server_time,current_database() AS database_name`);res.json({ok:true,database:'connected',result:r.rows[0]});}catch(e){res.status(500).json({ok:false,error:e.message});}});
 
 io.on('connection',socket=>{
-  console.log('[SOCKET] Connected:',socket.id); socket.emit('server:ready',{version:'2.2.0',transport:socket.conn.transport.name});
+  console.log('[SOCKET] Connected:',socket.id); socket.emit('server:ready',{version:'2.3.0',transport:socket.conn.transport.name});
   socket.on('room:join',async payload=>{try{
     const nama=String(payload?.nama||'').trim(),group=String(payload?.group||'').trim(),channel=String(payload?.channel||'').trim(),peerId=String(payload?.peerId||'').trim(),maxUsers=Number(payload?.maxUsers||0);
     if(!nama||!group||!channel||!peerId)return socket.emit('room:error',{message:'Data room tidak lengkap.'});
@@ -124,5 +177,5 @@ io.on('connection',socket=>{
 });
 setInterval(async()=>{const cutoff=Date.now()-65000;for(const[id,s]of sessions)if(s.timestamp<cutoff){rooms.get(s.room)?.delete(id);sessions.delete(id);await removePresence(id);}emitPresence();},15000);
 
-async function startServer(){console.log('========================================');console.log(' Komunikasi Group V2 Backend');console.log(' Version 2.2.1');console.log('========================================');await testDatabase();await initializeDatabase();server.listen(PORT,()=>{console.log(`[SERVER] Listening on port ${PORT}`);console.log(`[SERVER] PostgreSQL: ${db?'ENABLED':'DISABLED'}`);});}
+async function startServer(){console.log('========================================');console.log(' Komunikasi Group V2 Backend');console.log(' Version 2.3.0');console.log('========================================');await testDatabase();await initializeDatabase();server.listen(PORT,()=>{console.log(`[SERVER] Listening on port ${PORT}`);console.log(`[SERVER] PostgreSQL: ${db?'ENABLED':'DISABLED'}`);});}
 startServer();
