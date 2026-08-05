@@ -60,6 +60,42 @@ async function initializeDatabase() {
     await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS created_by VARCHAR(100) DEFAULT 'system'`);
     await db.query(`CREATE TABLE IF NOT EXISTS online_sessions (socket_id VARCHAR(255) PRIMARY KEY, username VARCHAR(100) NOT NULL, group_name VARCHAR(100), channel_name VARCHAR(100), peer_id VARCHAR(255), mic_status BOOLEAN DEFAULT FALSE, floor_status VARCHAR(30) DEFAULT 'idle', updated_at TIMESTAMPTZ DEFAULT NOW())`);
     await db.query(`CREATE TABLE IF NOT EXISTS chat_messages (id BIGSERIAL PRIMARY KEY, username VARCHAR(100) NOT NULL, group_name VARCHAR(100), channel_name VARCHAR(100), message TEXT NOT NULL, created_at TIMESTAMPTZ DEFAULT NOW())`);
+    // ===== ADMIN SYNC STAGE A: PostgreSQL schema only =====
+    await db.query(`CREATE TABLE IF NOT EXISTS app_config (
+      config_key VARCHAR(100) PRIMARY KEY,
+      config_value JSONB NOT NULL,
+      updated_by VARCHAR(100) DEFAULT 'system',
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )`);
+
+    await db.query(`CREATE TABLE IF NOT EXISTS audit_logs (
+      id BIGSERIAL PRIMARY KEY,
+      admin_name VARCHAR(100) NOT NULL,
+      action VARCHAR(100) NOT NULL,
+      target TEXT,
+      detail TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`);
+
+    const defaultGroups = [
+      {nama:'Grup 1',prefix:'',status:'aktif',channel:[
+        {nama:'CH 01',prefix:'',maxUsers:0,pttTimeout:0,status:'aktif',locked:false,muted:false},
+        {nama:'CH 02',prefix:'',maxUsers:5,pttTimeout:30,status:'aktif',locked:false,muted:false},
+        {nama:'CH 03',prefix:'',maxUsers:0,pttTimeout:0,status:'aktif',locked:false,muted:false}
+      ]},
+      {nama:'Grup 2',prefix:'',status:'aktif',channel:[
+        {nama:'CH 01',prefix:'',maxUsers:0,pttTimeout:0,status:'aktif',locked:false,muted:false},
+        {nama:'CH 02',prefix:'',maxUsers:3,pttTimeout:15,status:'aktif',locked:false,muted:false}
+      ]}
+    ];
+
+    await db.query(
+      `INSERT INTO app_config(config_key,config_value,updated_by)
+       VALUES($1,$2::jsonb,$3)
+       ON CONFLICT(config_key) DO NOTHING`,
+      ['groups', JSON.stringify(defaultGroups), 'system']
+    );
+
     const adminHash = await hashPassword(ADMIN_PASSWORD);
     await db.query(`INSERT INTO users(username,password_hash,role,active,banned,muted,created_by) VALUES($1,$2,'admin',TRUE,FALSE,FALSE,'system') ON CONFLICT(username) DO UPDATE SET role='admin'`, [ADMIN_NAME, adminHash]);
     console.log('[DB] Database tables READY.');
@@ -102,7 +138,7 @@ async function savePresence(s){ if(!db||!s)return; try{await db.query(`INSERT IN
 async function removePresence(id){if(!db)return;try{await db.query(`DELETE FROM online_sessions WHERE socket_id=$1`,[id]);}catch(e){console.error('[DB] removePresence:',e.message);}}
 function emitPresence(){io.emit('presence:update',publicSessions());}
 
-app.get('/health',async(req,res)=>{let database='disabled';if(db){try{await db.query('SELECT 1');database='connected';}catch{database='error';}}res.json({ok:true,service:'komunikasi-group-realtime',version:'2.3.0',database,time:new Date().toISOString(),users:sessions.size});});
+app.get('/health',async(req,res)=>{let database='disabled';if(db){try{await db.query('SELECT 1');database='connected';}catch{database='error';}}res.json({ok:true,service:'komunikasi-group-realtime',version:'2.4.1-A',database,time:new Date().toISOString(),users:sessions.size});});
 app.get('/api/presence',(req,res)=>res.json({ok:true,sessions:publicSessions()}));
 
 // ===== CLOUDFLARE REALTIME TURN =====
@@ -160,7 +196,7 @@ app.get('/api/turn-credentials', async (req, res) => {
 app.get('/api/db-test',async(req,res)=>{if(!requireDb(res))return;try{const r=await db.query(`SELECT NOW() AS server_time,current_database() AS database_name`);res.json({ok:true,database:'connected',result:r.rows[0]});}catch(e){res.status(500).json({ok:false,error:e.message});}});
 
 io.on('connection',socket=>{
-  console.log('[SOCKET] Connected:',socket.id); socket.emit('server:ready',{version:'2.3.0',transport:socket.conn.transport.name});
+  console.log('[SOCKET] Connected:',socket.id); socket.emit('server:ready',{version:'2.4.1-A',transport:socket.conn.transport.name});
   socket.on('room:join',async payload=>{try{
     const nama=String(payload?.nama||'').trim(),group=String(payload?.group||'').trim(),channel=String(payload?.channel||'').trim(),peerId=String(payload?.peerId||'').trim(),maxUsers=Number(payload?.maxUsers||0);
     if(!nama||!group||!channel||!peerId)return socket.emit('room:error',{message:'Data room tidak lengkap.'});
@@ -177,5 +213,5 @@ io.on('connection',socket=>{
 });
 setInterval(async()=>{const cutoff=Date.now()-65000;for(const[id,s]of sessions)if(s.timestamp<cutoff){rooms.get(s.room)?.delete(id);sessions.delete(id);await removePresence(id);}emitPresence();},15000);
 
-async function startServer(){console.log('========================================');console.log(' Komunikasi Group V2 Backend');console.log(' Version 2.3.0');console.log('========================================');await testDatabase();await initializeDatabase();server.listen(PORT,()=>{console.log(`[SERVER] Listening on port ${PORT}`);console.log(`[SERVER] PostgreSQL: ${db?'ENABLED':'DISABLED'}`);});}
+async function startServer(){console.log('========================================');console.log(' Komunikasi Group V2 Backend');console.log(' Version 2.4.1-A');console.log('========================================');await testDatabase();await initializeDatabase();server.listen(PORT,()=>{console.log(`[SERVER] Listening on port ${PORT}`);console.log(`[SERVER] PostgreSQL: ${db?'ENABLED':'DISABLED'}`);});}
 startServer();
