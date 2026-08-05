@@ -138,7 +138,78 @@ async function savePresence(s){ if(!db||!s)return; try{await db.query(`INSERT IN
 async function removePresence(id){if(!db)return;try{await db.query(`DELETE FROM online_sessions WHERE socket_id=$1`,[id]);}catch(e){console.error('[DB] removePresence:',e.message);}}
 function emitPresence(){io.emit('presence:update',publicSessions());}
 
-app.get('/health',async(req,res)=>{let database='disabled';if(db){try{await db.query('SELECT 1');database='connected';}catch{database='error';}}res.json({ok:true,service:'komunikasi-group-realtime',version:'2.4.1-A',database,time:new Date().toISOString(),users:sessions.size});});
+app.get('/health',async(req,res)=>{let database='disabled';if(db){try{await db.query('SELECT 1');database='connected';}catch{database='error';}}res.json({ok:true,service:'komunikasi-group-realtime',version:'2.4.1-B',database,time:new Date().toISOString(),users:sessions.size});});
+
+// ===== ADMIN SYNC STAGE B: PostgreSQL Group/Channel API =====
+app.get('/api/config/groups', async (req,res) => {
+  if(!requireDb(res)) return;
+  try {
+    const r = await db.query(
+      `SELECT config_value, updated_by, updated_at
+       FROM app_config
+       WHERE config_key=$1
+       LIMIT 1`,
+      ['groups']
+    );
+    const row = r.rows[0];
+    res.json({
+      ok:true,
+      groups:row?.config_value || [],
+      updatedBy:row?.updated_by || 'system',
+      updatedAt:row?.updated_at || null
+    });
+  } catch(e) {
+    console.error('[CONFIG] GET GROUPS:', e.message);
+    res.status(500).json({ok:false,message:'Gagal membaca konfigurasi Group/Channel.'});
+  }
+});
+
+app.put('/api/config/groups', requireAdmin, async (req,res) => {
+  if(!requireDb(res)) return;
+  try {
+    if(!Array.isArray(req.body?.groups)) {
+      return res.status(400).json({ok:false,message:'Format groups tidak valid.'});
+    }
+
+    const groups = req.body.groups.map(g => ({
+      nama:String(g?.nama || '').trim(),
+      prefix:String(g?.prefix || ''),
+      status:g?.status === 'nonaktif' ? 'nonaktif' : 'aktif',
+      channel:Array.isArray(g?.channel) ? g.channel.map(c => ({
+        nama:String(c?.nama || '').trim(),
+        prefix:String(c?.prefix || ''),
+        maxUsers:Math.max(0, Number(c?.maxUsers) || 0),
+        pttTimeout:Math.max(0, Number(c?.pttTimeout) || 0),
+        status:c?.status === 'nonaktif' ? 'nonaktif' : 'aktif',
+        locked:!!c?.locked,
+        muted:!!c?.muted
+      })).filter(c => c.nama) : []
+    })).filter(g => g.nama);
+
+    const r = await db.query(
+      `INSERT INTO app_config(config_key,config_value,updated_by,updated_at)
+       VALUES($1,$2::jsonb,$3,NOW())
+       ON CONFLICT(config_key) DO UPDATE SET
+         config_value=EXCLUDED.config_value,
+         updated_by=EXCLUDED.updated_by,
+         updated_at=NOW()
+       RETURNING config_value,updated_by,updated_at`,
+      ['groups', JSON.stringify(groups), ADMIN_NAME]
+    );
+
+    console.log('[CONFIG] GROUPS SAVED:', groups.length);
+    res.json({
+      ok:true,
+      groups:r.rows[0].config_value,
+      updatedBy:r.rows[0].updated_by,
+      updatedAt:r.rows[0].updated_at
+    });
+  } catch(e) {
+    console.error('[CONFIG] PUT GROUPS:', e.message);
+    res.status(500).json({ok:false,message:'Gagal menyimpan konfigurasi Group/Channel.'});
+  }
+});
+
 app.get('/api/presence',(req,res)=>res.json({ok:true,sessions:publicSessions()}));
 
 // ===== CLOUDFLARE REALTIME TURN =====
@@ -196,7 +267,7 @@ app.get('/api/turn-credentials', async (req, res) => {
 app.get('/api/db-test',async(req,res)=>{if(!requireDb(res))return;try{const r=await db.query(`SELECT NOW() AS server_time,current_database() AS database_name`);res.json({ok:true,database:'connected',result:r.rows[0]});}catch(e){res.status(500).json({ok:false,error:e.message});}});
 
 io.on('connection',socket=>{
-  console.log('[SOCKET] Connected:',socket.id); socket.emit('server:ready',{version:'2.4.1-A',transport:socket.conn.transport.name});
+  console.log('[SOCKET] Connected:',socket.id); socket.emit('server:ready',{version:'2.4.1-B',transport:socket.conn.transport.name});
   socket.on('room:join',async payload=>{try{
     const nama=String(payload?.nama||'').trim(),group=String(payload?.group||'').trim(),channel=String(payload?.channel||'').trim(),peerId=String(payload?.peerId||'').trim(),maxUsers=Number(payload?.maxUsers||0);
     if(!nama||!group||!channel||!peerId)return socket.emit('room:error',{message:'Data room tidak lengkap.'});
@@ -213,5 +284,5 @@ io.on('connection',socket=>{
 });
 setInterval(async()=>{const cutoff=Date.now()-65000;for(const[id,s]of sessions)if(s.timestamp<cutoff){rooms.get(s.room)?.delete(id);sessions.delete(id);await removePresence(id);}emitPresence();},15000);
 
-async function startServer(){console.log('========================================');console.log(' Komunikasi Group V2 Backend');console.log(' Version 2.4.1-A');console.log('========================================');await testDatabase();await initializeDatabase();server.listen(PORT,()=>{console.log(`[SERVER] Listening on port ${PORT}`);console.log(`[SERVER] PostgreSQL: ${db?'ENABLED':'DISABLED'}`);});}
+async function startServer(){console.log('========================================');console.log(' Komunikasi Group V2 Backend');console.log(' Version 2.4.1-B');console.log('========================================');await testDatabase();await initializeDatabase();server.listen(PORT,()=>{console.log(`[SERVER] Listening on port ${PORT}`);console.log(`[SERVER] PostgreSQL: ${db?'ENABLED':'DISABLED'}`);});}
 startServer();
