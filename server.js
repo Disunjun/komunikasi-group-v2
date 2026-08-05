@@ -152,6 +152,11 @@ app.get('/api/config/groups', async (req,res) => {
       ['groups']
     );
     const row = r.rows[0];
+    io.emit('config:groups:update', {
+  groups: r.rows[0].config_value,
+  updatedBy: r.rows[0].updated_by,
+  updatedAt: r.rows[0].updated_at
+});
     res.json({
       ok:true,
       groups:row?.config_value || [],
