@@ -882,22 +882,6 @@
 
     <!-- Toast Container -->
     <div class="toast-container" id="toastContainer"></div>
-
-
-    <!-- ========== FLOATING DEBUG ========== -->
-    <button id="debugFab" type="button" onclick="toggleDebugPanel()" title="Debug koneksi">D</button>
-    <div id="debugPanel">
-        <div class="debug-head">
-            <strong>🛠 DEBUG KONEKSI</strong>
-            <div class="debug-actions">
-                <button class="debug-mini-btn" type="button" onclick="refreshDebugPanel()">↻ Refresh</button>
-                <button class="debug-mini-btn" type="button" onclick="copyDebugInfo()">📋 Copy</button>
-                <button class="debug-mini-btn" type="button" onclick="toggleDebugPanel()">✕</button>
-            </div>
-        </div>
-        <pre id="debugOutput">Tekan Refresh untuk membaca status perangkat.</pre>
-    </div>
-
 <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
 <script src="https://cdn.socket.io/4.8.1/socket.io.min.js"></script>
 <script>
@@ -3405,6 +3389,7 @@ function getDebugInfo() {
 function formatDebugInfo(d) {
     const yesNo = v => v ? "YES" : "NO";
     const lines = [
+        `DEBUG UI   : ${DEBUG_UI_VERSION}`,
         `TIME       : ${d.waktu}`,
         `USER       : ${d.user}`,
         `GROUP      : ${d.group}`,
@@ -3473,6 +3458,75 @@ setInterval(() => {
     if (panel?.classList.contains("aktif")) refreshDebugPanel();
 }, 2000);
 
+
+
+// ========== DEBUG GLOBAL v2 ==========
+const DEBUG_UI_VERSION = "DEBUG-GLOBAL-v2";
+
+function ensureGlobalDebugUI() {
+    if (!document.body) return;
+
+    let fab = document.getElementById("debugFab");
+    if (!fab) {
+        fab = document.createElement("button");
+        fab.id = "debugFab";
+        fab.type = "button";
+        fab.textContent = "D";
+        fab.title = "Debug koneksi";
+        fab.setAttribute("aria-label", "Debug koneksi");
+        fab.onclick = toggleDebugPanel;
+        document.body.appendChild(fab);
+    }
+
+    let panel = document.getElementById("debugPanel");
+    if (!panel) {
+        panel = document.createElement("div");
+        panel.id = "debugPanel";
+        panel.innerHTML = `
+            <div class="debug-head">
+                <strong>🛠 DEBUG GLOBAL v2</strong>
+                <div class="debug-actions">
+                    <button class="debug-mini-btn" type="button" onclick="refreshDebugPanel()">↻ Refresh</button>
+                    <button class="debug-mini-btn" type="button" onclick="copyDebugInfo()">📋 Copy</button>
+                    <button class="debug-mini-btn" type="button" onclick="toggleDebugPanel()">✕</button>
+                </div>
+            </div>
+            <pre id="debugOutput">Tekan Refresh untuk membaca status perangkat.</pre>
+        `;
+        document.body.appendChild(panel);
+    }
+
+    Object.assign(fab.style, {
+        display: "block",
+        visibility: "visible",
+        opacity: "1",
+        position: "fixed",
+        right: "14px",
+        bottom: "14px",
+        zIndex: "2147483646"
+    });
+    panel.style.zIndex = "2147483647";
+}
+
+function startGlobalDebugUI() {
+    ensureGlobalDebugUI();
+    setInterval(ensureGlobalDebugUI, 1500);
+
+    try {
+        const obs = new MutationObserver(() => {
+            if (!document.getElementById("debugFab") || !document.getElementById("debugPanel")) {
+                ensureGlobalDebugUI();
+            }
+        });
+        obs.observe(document.body, { childList: true, subtree: true });
+    } catch (_) {}
+}
+
+if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", startGlobalDebugUI, { once: true });
+} else {
+    startGlobalDebugUI();
+}
 
 if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
