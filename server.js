@@ -93,100 +93,6 @@ Document
 Pasted text(9).txt
 Document
 
-Tidak. Seharusnya tidak perlu setiap kali masuk browser melakukan F12 → Application → Clear site data.
-
-Clear site data hanya kita lakukan sementara saat pengujian/development karena aplikasi Komunikasi Group V2 menggunakan PWA + Service Worker, sehingga browser kadang masih menjalankan index.html/JavaScript versi lama.
-
-Untuk penggunaan normal nantinya:
-
-Buka Komunikasi Group
-        ↓
-Browser cek versi terbaru
-        ↓
-Service Worker update otomatis
-        ↓
-Aplikasi langsung digunakan
-
-Jadi pengguna HP juga tidak perlu melakukan clear cache manual.
-
-Untuk pengujian Cloudflare TURN v3 yang baru saja kita pasang, lakukan clear/hard refresh sekali saja pada PC/HP yang masih menampilkan:
-
-DEBUG-GLOBAL-v2
-
-Kalau tombol D sudah menunjukkan:
-
-DEBUG UI   : DEBUG-GLOBAL-v3
-TURN CONFIG: LOADED
-
-maka tidak perlu clear lagi.
-
-Setelah pengujian TURN PC ↔ HP selesai, saya sarankan kita perbaiki sw.js dengan automatic cache versioning/update, sehingga setiap GitHub → Netlify deploy baru, perangkat otomatis mengambil versi terbaru tanpa F12/Clear Site Data.
-
-Sekarang ini saya buka 2 browser dan 1 HP, masuk Admin Panel berbeda semua 
-
-Ya, ini masalah penting berikutnya, dan penyebabnya sudah terlihat dari kode frontend kita.
-
-Saat ini Admin Panel masih campuran antara PostgreSQL/server dan localStorage browser.
-
-Contohnya, fungsi dasar ambilData() membaca langsung dari localStorage, dan simpanData() juga menyimpan ke localStorage. Bahkan data Group default dibuat dan disimpan lokal pada masing-masing browser.
-
-Sementara bagian user sudah mulai menggunakan data server (serverUsers), tetapi statistik Group/Channel masih membaca ambilData("daftarGrup").
-
-Akibatnya sangat masuk akal kalau sekarang:
-
-Browser 1 Admin Panel
-Grup/Channel/setting = versi localStorage Browser 1
-
-Browser 2 Admin Panel
-Grup/Channel/setting = versi localStorage Browser 2
-
-HP Admin Panel
-Grup/Channel/setting = versi localStorage HP
-
-Jadi Clear Site Data malah dapat membuat perbedaannya semakin terlihat, karena localStorage masing-masing perangkat memang independen.
-
-Ini harus kita bereskan
-
-Untuk aplikasi multi-device seperti Komunikasi Group V2, Admin Panel tidak boleh menjadikan localStorage sebagai database utama.
-
-Targetnya:
-
-                 PostgreSQL Railway
-                       │
-          ┌────────────┼────────────┐
-          │            │            │
-       Browser 1    Browser 2       HP
-          │            │            │
-          └────────────┼────────────┘
-                       │
-                 DATA SAMA ✅
-
-Yang seharusnya tersentralisasi ke PostgreSQL:
-
-Users          → PostgreSQL  ✅ sudah
-Groups         → PostgreSQL  ← berikutnya
-Channels       → PostgreSQL
-Settings       → PostgreSQL
-Audit Log      → PostgreSQL
-
-Sedangkan localStorage cukup untuk hal lokal seperti:
-
-Theme
-preferensi tampilan
-cache sementara
-
-Bahkan di kode saat ini audit/statistik masih mengambil logAktivitas dari localStorage, sehingga riwayat/statistik juga berpotensi berbeda antarperangkat.
-
-Saya sarankan kita selesaikan sinkronisasi Admin Panel ke PostgreSQL terlebih dahulu sebelum melanjutkan pengujian TURN. TURN kita sudah berhasil sampai tahap mendapatkan ICE credentials; itu aman kita tinggalkan sementara.
-
-Urutan perbaikannya: Group + Channel → Settings → Audit/Monitoring → hilangkan ketergantungan Admin Panel pada localStorage → uji 2 browser + HP.
-
-Setelah selesai, perubahan Admin di Browser 1 harus langsung terlihat sama ketika Admin Panel dibuka/refresh dari Browser 2 dan HP.
-
-Kalau setuju, saya lanjutkan dengan PostgreSQL Admin Panel Sync, dimulai dari server.js lalu index.html, tanpa merusak user/login dan TURN yang sekarang sudah berhasil.
-
-lanjutkan dengan PostgreSQL Admin Panel Sync, dimulai dari server.js lalu index.html
-
 Sudah saya lanjutkan PostgreSQL Admin Panel Sync untuk server.js dan index.html, menggunakan versi terbaru yang sudah memiliki Cloudflare TURN.
 
 Masalah awal memang berasal dari daftarGrup yang masih dibaca/ditulis lewat localStorage, sehingga tiap browser memiliki database Group/Channel sendiri.
@@ -260,6 +166,144 @@ Kerjakan server.js dahulu. Setelah /health menunjukkan 2.4.0, kirim hasilnya ke 
 server_postgresql_admin_sync_v2.4.0.txt
 Document
 index_postgresql_admin_sync_debug_v4.txt
+Document
+Pasted text(10).txt
+Document
+Deploy Logs https://railway.com/project/b6f076c4-4564-422d-877c-593373f65911/service/
+
+Deploy gagal karena syntax error di server.js Railway, bukan PostgreSQL.
+
+Log menunjukkan Node menjalankan server.js, lalu langsung berhenti pada baris 10 dengan:
+
+SyntaxError: Unexpected token ':'
+
+dan Railway terus mencoba restart container.
+
+Yang menarik: saya cek file v2.4.0 yang saya buat di sini, baris 10 seharusnya:
+
+const { Pool } = pg;
+
+dan saya jalankan pemeriksaan:
+
+node --check server.mjs
+
+hasilnya lolos tanpa syntax error.
+
+Artinya server.js yang sekarang berada di GitHub tidak sama dengan file v2.4.0 yang saya berikan, atau saat copy-paste ada teks tambahan/rusak di bagian awal file.
+
+Jangan pasang index.html dulu
+
+Kita pulihkan Railway terlebih dahulu.
+
+Buka GitHub → server.js → lihat baris 1–15. Seharusnya persis seperti ini:
+
+import 'dotenv/config';
+import express from 'express';
+import cors from 'cors';
+import http from 'http';
+import crypto from 'crypto';
+import { promisify } from 'util';
+import { Server } from 'socket.io';
+import pg from 'pg';
+
+const { Pool } = pg;
+const scryptAsync = promisify(crypto.scrypt);
+const app = express();
+const server = http.createServer(app);
+const PORT = Number(process.env.PORT || 3000);
+const FRONTEND_ORIGINS = (process.env.FRONTEND_ORIGINS || '*').split(',').map(s => s.trim()).filter(Boolean);
+
+Gunakan kembali file yang sudah saya syntax-check:
+
+server_postgresql_admin_sync_v2.4.0.txt
+
+Cara paling aman: di GitHub buka server.js → Edit → Ctrl+A → hapus seluruh isi → buka TXT di atas → Ctrl+A → Ctrl+C → paste ke server.js → Commit.
+
+Jangan mengubah apa pun di dalamnya terlebih dahulu.
+
+Setelah Railway redeploy, target Deploy Logs kita adalah:
+
+Komunikasi Group V2 Backend
+Version 2.4.0
+
+[DB] DATABASE_URL ditemukan.
+[DB] PostgreSQL CONNECTED
+[DB] Database tables READY.
+[SERVER] Listening on port 8080
+[SERVER] PostgreSQL: ENABLED
+
+Kalau sudah muncul Version 2.4.0 + Listening on port 8080, baru kita lanjut memasang index.html PostgreSQL Admin Sync.
+
+server_postgresql_admin_sync_v2.4.0.txt
+Document
+index.html
+File
+sw.js
+JavaScript
+manifest.json
+File
+netlify.toml
+File
+https://railway.com/project/b6f076c4-4564-422d-877c-593373f65911/service/75fc2611-803a-424d-8d70-828c75b515e8?environmentId=c8822200-ee83-4ffb-bd8c-442e80c45d8a
+{"ok":true,"service":"komunikasi-group-realtime","time":"2026-08-03T05:53:41.181Z","users":0}
+{"ok":true,"service":"komunikasi-group-realtime","time":"2026-08-03T06:18:34.011Z","users":0}
+eaab12af-19e3-4ead-acfa-e358965e9528.html
+File
+Periksa Hasil download index.html dari https://app.netlify.com/
+db44bc2c-4884-40f8-8138-c4f9e1f3cbdb.html
+File
+cek index.html dari https://app.netlify.com/projects/komunikasi-group/deploys/6a704c7e3063b400084d4155
+Sudah di setting selalu gagal
+Apakah status building tidak masalah? Seharusnya succes
+https://app.netlify.com/projects/komunikasi-group/configuration/general
+Pasted text.txt
+Document
+Pasted text(1).txt
+Document
+Apakah perbedaan tersebut tidak berpengaruh?
+komunikasi-group-v2-production.up.railway.app
+FRONTEND_ORIGINS=https://komunikasi-group.netlify.app
+
+Dari rangkaian yang Anda kirim, ada dua deployment terpisah yang perlu dibedakan:
+
+GitHub
+├── Frontend
+│   ├── index.html
+│   ├── sw.js
+│   ├── manifest.json
+│   └── netlify.toml
+│        ↓
+│      Netlify
+│      komunikasi-group.netlify.app
+│
+└── Backend
+    └── server.js
+         ↓
+       Railway
+       komunikasi-group-v2-production.up.railway.app
+
+FRONTEND_ORIGINS=https://komunikasi-group.netlify.app di Railway memang sesuai untuk mengizinkan frontend Netlify mengakses backend.
+
+Tetapi sekarang prioritasnya bukan Netlify. Railway backend v2.4.0 tadi gagal start karena server.js mengalami syntax error di baris 10. Log menunjukkan node server.js dijalankan lalu berhenti dengan SyntaxError: Unexpected token ':'.
+
+Jadi jangan ubah index.html, sw.js, manifest.json, atau netlify.toml dulu.
+
+Urutan aman sekarang hanya:
+
+Ganti seluruh server.js GitHub dengan file ini: 
+server_postgresql_admin_sync_v2.4.0.txt
+Commit.
+Tunggu Railway redeploy.
+Buka https://komunikasi-group-v2-production.up.railway.app/health.
+Targetnya harus menunjukkan "version":"2.4.0" dan "database":"connected".
+
+Kalau /health sudah 2.4.0, berarti PostgreSQL Admin Sync backend hidup. Baru setelah itu kita pasang index.html v4 DBSYNC ke Netlify/GitHub.
+
+Status Netlify Building memang belum dianggap selesai; tunggu sampai deploy menjadi Published/Success sebelum menguji frontend. Namun itu persoalan frontend dan tidak menyebabkan syntax error server.js Railway.
+
+Jadi sekarang fokus satu titik saja: buat Railway /health kembali hidup dengan Version 2.4.0.
+
+server_postgresql_admin_sync_v2.4.0.txt
 Document
 
 Library
