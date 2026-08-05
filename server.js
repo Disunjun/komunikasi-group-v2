@@ -111,6 +111,18 @@ async function initializeDatabase() {
       created_at TIMESTAMPTZ DEFAULT NOW()
     )`);
 
+    // ===== STAGE G1: centralized user activity/statistics =====
+    await db.query(`CREATE TABLE IF NOT EXISTS activity_logs (
+      id BIGSERIAL PRIMARY KEY,
+      username VARCHAR(100) NOT NULL,
+      group_name VARCHAR(100),
+      channel_name VARCHAR(100),
+      action VARCHAR(30) NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`);
+    await db.query(`CREATE INDEX IF NOT EXISTS idx_activity_logs_created_at ON activity_logs(created_at DESC)`);
+    await db.query(`CREATE INDEX IF NOT EXISTS idx_activity_logs_group_channel ON activity_logs(group_name,channel_name)`);
+
     const defaultGroups = [
       {nama:'Grup 1',prefix:'',status:'aktif',channel:[
         {nama:'CH 01',prefix:'',maxUsers:0,pttTimeout:0,status:'aktif',locked:false,muted:false},
@@ -172,7 +184,7 @@ async function savePresence(s){ if(!db||!s)return; try{await db.query(`INSERT IN
 async function removePresence(id){if(!db)return;try{await db.query(`DELETE FROM online_sessions WHERE socket_id=$1`,[id]);}catch(e){console.error('[DB] removePresence:',e.message);}}
 function emitPresence(){io.emit('presence:update',publicSessions());}
 
-app.get('/health',async(req,res)=>{let database='disabled';if(db){try{await db.query('SELECT 1');database='connected';}catch{database='error';}}res.json({ok:true,service:'komunikasi-group-realtime',version:'2.5.0-E1',database,time:new Date().toISOString(),users:sessions.size});});
+app.get('/health',async(req,res)=>{let database='disabled';if(db){try{await db.query('SELECT 1');database='connected';}catch{database='error';}}res.json({ok:true,service:'komunikasi-group-realtime',version:'2.6.0-G1',database,time:new Date().toISOString(),users:sessions.size});});
 
 // ===== ADMIN SYNC STAGE B: PostgreSQL Group/Channel API =====
 app.get('/api/config/groups', async (req,res) => {
@@ -294,6 +306,68 @@ app.delete('/api/audit-logs', requireAdmin, async (req,res) => {
   }
 });
 
+
+async function writeActivity(username, groupName, channelName, action) {
+  if (!db) return;
+  try {
+    await db.query(
+      `INSERT INTO activity_logs(username,group_name,channel_name,action,created_at)
+       VALUES($1,$2,$3,$4,NOW())`,
+      [
+        String(username || '').slice(0,100),
+        String(groupName || '').slice(0,100),
+        String(channelName || '').slice(0,100),
+        String(action || '').slice(0,30)
+      ]
+    );
+  } catch(e) {
+    console.error('[ACTIVITY] WRITE ERROR:', e.message);
+  }
+}
+
+// Centralized Monitoring + Statistics source for Admin Panel.
+app.get('/api/admin/stats', requireAdmin, async (req,res) => {
+  if(!requireDb(res)) return;
+  try {
+    const [usersR, groupsR, activityR] = await Promise.all([
+      db.query(`SELECT COUNT(*)::int AS total FROM users`),
+      db.query(`SELECT config_value FROM app_config WHERE config_key='groups' LIMIT 1`),
+      db.query(`
+        SELECT id,username,group_name,channel_name,action,created_at
+        FROM activity_logs
+        WHERE created_at >= NOW() - INTERVAL '12 months'
+        ORDER BY id DESC
+        LIMIT 10000
+      `)
+    ]);
+
+    const groups = Array.isArray(groupsR.rows[0]?.config_value) ? groupsR.rows[0].config_value : [];
+    const totalChannels = groups.reduce((n,g)=>n+(Array.isArray(g.channel)?g.channel.length:0),0);
+
+    res.json({
+      ok:true,
+      summary:{
+        totalUsers: usersR.rows[0]?.total || 0,
+        onlineUsers: sessions.size,
+        totalGroups: groups.length,
+        totalChannels
+      },
+      sessions: publicSessions(),
+      activity: activityR.rows.map(r=>({
+        id:r.id,
+        nama:r.username,
+        group:r.group_name || '',
+        channel:r.channel_name || '',
+        aksi:r.action,
+        createdAt:r.created_at
+      }))
+    });
+  } catch(e) {
+    console.error('[STATS] GET ERROR:', e.message);
+    res.status(500).json({ok:false,message:'Gagal membaca Monitoring/Statistik.'});
+  }
+});
+
 app.get('/api/presence',(req,res)=>res.json({ok:true,sessions:publicSessions()}));
 
 // ===== CLOUDFLARE REALTIME TURN =====
@@ -351,22 +425,38 @@ app.get('/api/turn-credentials', async (req, res) => {
 app.get('/api/db-test',async(req,res)=>{if(!requireDb(res))return;try{const r=await db.query(`SELECT NOW() AS server_time,current_database() AS database_name`);res.json({ok:true,database:'connected',result:r.rows[0]});}catch(e){res.status(500).json({ok:false,error:e.message});}});
 
 io.on('connection',socket=>{
-  console.log('[SOCKET] Connected:',socket.id); socket.emit('server:ready',{version:'2.5.0-E1',transport:socket.conn.transport.name});
+  console.log('[SOCKET] Connected:',socket.id); socket.emit('server:ready',{version:'2.6.0-G1',transport:socket.conn.transport.name});
   socket.on('room:join',async payload=>{try{
     const nama=String(payload?.nama||'').trim(),group=String(payload?.group||'').trim(),channel=String(payload?.channel||'').trim(),peerId=String(payload?.peerId||'').trim(),maxUsers=Number(payload?.maxUsers||0);
     if(!nama||!group||!channel||!peerId)return socket.emit('room:error',{message:'Data room tidak lengkap.'});
     if(db){const ur=await db.query(`SELECT active,banned FROM users WHERE lower(username)=lower($1) LIMIT 1`,[nama]); if(!ur.rows[0])return socket.emit('room:error',{message:'User tidak terdaftar di database.'}); if(ur.rows[0].banned||!ur.rows[0].active)return socket.emit('room:error',{message:'Akun tidak diizinkan masuk.'});}
     const blockedUntil=kicked.get(nama);if(blockedUntil&&blockedUntil>Date.now())return socket.emit('room:error',{message:'Anda sedang di-kick oleh admin.'});
     const room=`${group}::${channel}`; const existing=[...(rooms.get(room)||new Set())].map(id=>sessions.get(id)).filter(Boolean).filter(s=>s.nama!==nama); if(maxUsers>0&&existing.length>=maxUsers)return socket.emit('room:error',{message:`Channel penuh! Maksimal ${maxUsers} user.`});
-    const old=sessions.get(socket.id);if(old?.room){rooms.get(old.room)?.delete(socket.id);socket.leave(old.room);} const session={socketId:socket.id,nama,group,channel,room,peerId,micStatus:false,floorStatus:'idle',timestamp:Date.now()}; sessions.set(socket.id,session);if(!rooms.has(room))rooms.set(room,new Set());rooms.get(room).add(socket.id);socket.join(room);await savePresence(session);socket.emit('room:joined',{room,users:roomUsers(room),self:session});io.to(room).emit('room:users',roomUsers(room));emitPresence();console.log('[ROOM JOIN]',nama,'=>',room);
+    const old=sessions.get(socket.id);
+    if(old?.room){
+      rooms.get(old.room)?.delete(socket.id);
+      socket.leave(old.room);
+      await writeActivity(old.nama,old.group,old.channel,'KELUAR');
+    }
+    const session={socketId:socket.id,nama,group,channel,room,peerId,micStatus:false,floorStatus:'idle',timestamp:Date.now()};
+    sessions.set(socket.id,session);
+    if(!rooms.has(room))rooms.set(room,new Set());
+    rooms.get(room).add(socket.id);
+    socket.join(room);
+    await savePresence(session);
+    await writeActivity(nama,group,channel,'MASUK');
+    socket.emit('room:joined',{room,users:roomUsers(room),self:session});
+    io.to(room).emit('room:users',roomUsers(room));
+    emitPresence();
+    console.log('[ROOM JOIN]',nama,'=>',room);
   }catch(e){console.error('[ROOM JOIN ERROR]',e);socket.emit('room:error',{message:e.message||'Gagal bergabung room.'});}});
   socket.on('presence:update',async patch=>{const s=sessions.get(socket.id);if(!s)return;if(typeof patch?.micStatus==='boolean')s.micStatus=patch.micStatus;if(typeof patch?.floorStatus==='string')s.floorStatus=patch.floorStatus;s.timestamp=Date.now();await savePresence(s);io.to(s.room).emit('room:users',roomUsers(s.room));emitPresence();});
   socket.on('floor:event',event=>{const s=sessions.get(socket.id);if(!s?.room)return;socket.to(s.room).emit('floor:event',{...event,from:s.nama});});
   socket.on('chat:send',async(payload,ack)=>{try{const s=sessions.get(socket.id);if(!s?.room){ack?.({ok:false,message:'Belum masuk channel.'});return;}const message=String(payload?.message||'').trim().slice(0,2000);if(!message){ack?.({ok:false,message:'Pesan kosong.'});return;}if(db){const ur=await db.query(`SELECT muted,active,banned FROM users WHERE lower(username)=lower($1) LIMIT 1`,[s.nama]);if(ur.rows[0]?.muted||!ur.rows[0]?.active||ur.rows[0]?.banned){ack?.({ok:false,message:'Akun tidak diizinkan mengirim pesan.'});return;}await db.query(`INSERT INTO chat_messages(username,group_name,channel_name,message) VALUES($1,$2,$3,$4)`,[s.nama,s.group,s.channel,message]);}io.to(s.room).emit('chat:message',{nama:s.nama,message});ack?.({ok:true});}catch(e){console.error('[CHAT ERROR]',e.message);socket.emit('chat:error',{message:'Pesan gagal dikirim.'});ack?.({ok:false,message:'Pesan gagal dikirim.'});}});
   socket.on('admin:kick',async({nama})=>{if(!nama)return;kicked.set(nama,Date.now()+300000);await writeAudit(ADMIN_NAME,'KICK USER',nama,'User di-kick selama 5 menit');for(const s of sessions.values())if(s.nama===nama){io.to(s.socketId).emit('admin:kick',{nama,expiresAt:kicked.get(nama)});io.sockets.sockets.get(s.socketId)?.disconnect(true);}});
-  socket.on('disconnect',async reason=>{const s=sessions.get(socket.id);console.log('[SOCKET] Disconnect:',socket.id,reason);if(!s)return;rooms.get(s.room)?.delete(socket.id);if(rooms.get(s.room)?.size===0)rooms.delete(s.room);sessions.delete(socket.id);await removePresence(socket.id);if(s.room)io.to(s.room).emit('room:users',roomUsers(s.room));emitPresence();});
+  socket.on('disconnect',async reason=>{const s=sessions.get(socket.id);console.log('[SOCKET] Disconnect:',socket.id,reason);if(!s)return;rooms.get(s.room)?.delete(socket.id);if(rooms.get(s.room)?.size===0)rooms.delete(s.room);sessions.delete(socket.id);await removePresence(socket.id);await writeActivity(s.nama,s.group,s.channel,'KELUAR');if(s.room)io.to(s.room).emit('room:users',roomUsers(s.room));emitPresence();});
 });
-setInterval(async()=>{const cutoff=Date.now()-65000;for(const[id,s]of sessions)if(s.timestamp<cutoff){rooms.get(s.room)?.delete(id);sessions.delete(id);await removePresence(id);}emitPresence();},15000);
+setInterval(async()=>{const cutoff=Date.now()-65000;for(const[id,s]of sessions)if(s.timestamp<cutoff){rooms.get(s.room)?.delete(id);sessions.delete(id);await removePresence(id);await writeActivity(s.nama,s.group,s.channel,'KELUAR');}emitPresence();},15000);
 
-async function startServer(){console.log('========================================');console.log(' Komunikasi Group V2 Backend');console.log(' Version 2.5.0-E1');console.log('========================================');await testDatabase();await initializeDatabase();server.listen(PORT,()=>{console.log(`[SERVER] Listening on port ${PORT}`);console.log(`[SERVER] PostgreSQL: ${db?'ENABLED':'DISABLED'}`);});}
+async function startServer(){console.log('========================================');console.log(' Komunikasi Group V2 Backend');console.log(' Version 2.6.0-G1');console.log('========================================');await testDatabase();await initializeDatabase();server.listen(PORT,()=>{console.log(`[SERVER] Listening on port ${PORT}`);console.log(`[SERVER] PostgreSQL: ${db?'ENABLED':'DISABLED'}`);});}
 startServer();
