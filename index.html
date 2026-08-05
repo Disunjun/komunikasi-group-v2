@@ -3030,15 +3030,20 @@ function pasangSuara(panggilan) {
         document.body.appendChild(el);
         // Diagnostic: explicitly ask browser to play and record autoplay rejection.
         // This does not alter signaling/call logic.
-        const playPromise = el.play();
-        if(playPromise && typeof playPromise.then === "function") {
-            playPromise
-                .then(() => { el.dataset.debugPlay = "ok"; })
-                .catch(err => {
-                    el.dataset.debugPlay = `blocked:${err?.name || "Error"}:${err?.message || ""}`;
-                    console.warn("[AUDIO] play blocked:", err);
-                });
-        }
+        const tryPlayRemote = async () => {
+            try {
+                const p = el.play();
+                if(p && typeof p.then === "function") await p;
+                el.dataset.debugPlay = "ok";
+                audioOutputUnlocked = true;
+                audioUnlockLastError = "-";
+            } catch(err) {
+                el.dataset.debugPlay = `blocked:${err?.name || "Error"}:${err?.message || ""}`;
+                audioUnlockLastError = err?.message || String(err);
+                console.warn("[AUDIO] play blocked; waiting for user gesture:", err);
+            }
+        };
+        tryPlayRemote();
 
         // If recording is active, connect this incoming stream to the mixer
         if(isRecording && audioContext && destinationNode) {
@@ -3140,6 +3145,50 @@ function debugMediaSnapshot() {
     return {calls,audios};
 }
 
+
+
+// ========== MOBILE AUDIO UNLOCK v1 ==========
+let audioOutputUnlocked = false;
+let audioUnlockLastError = "-";
+
+async function unlockAudioOutput() {
+    try {
+        const Ctx = window.AudioContext || window.webkitAudioContext;
+        if(Ctx) {
+            if(!window.__kgAudioContext) window.__kgAudioContext = new Ctx();
+            if(window.__kgAudioContext.state === "suspended") await window.__kgAudioContext.resume();
+        }
+
+        const audios = [...document.querySelectorAll("audio")];
+        let played = 0;
+        for(const el of audios) {
+            try {
+                el.muted = false;
+                el.volume = 1;
+                const p = el.play();
+                if(p && typeof p.then === "function") await p;
+                el.dataset.debugPlay = "ok";
+                played++;
+            } catch(err) {
+                el.dataset.debugPlay = `blocked:${err?.name || "Error"}:${err?.message || ""}`;
+            }
+        }
+
+        audioOutputUnlocked = true;
+        audioUnlockLastError = "-";
+        console.log(`[AUDIO] Output unlocked; retried ${audios.length}, playing ${played}`);
+        return true;
+    } catch(err) {
+        audioOutputUnlocked = false;
+        audioUnlockLastError = err?.message || String(err);
+        console.warn("[AUDIO] Unlock failed:", err);
+        return false;
+    }
+}
+
+["pointerdown","touchend","click"].forEach(evt => {
+    document.addEventListener(evt, () => { unlockAudioOutput(); }, {passive:true});
+});
 
 // ========== PTT & FLOOR CONTROL ==========
 function pttDown(e) {
@@ -3599,7 +3648,10 @@ function getDebugInfo() {
         turnServers: turnIceServers.length,
         turnError: turnConfigError || "-",
         turnLoadedAt: turnLoadedAt ? turnLoadedAt.toLocaleString() : "-",
-        mediaDebug: debugMediaSnapshot()
+        mediaDebug: debugMediaSnapshot(),
+        audioOutputUnlocked,
+        audioUnlockLastError,
+        audioContextState: window.__kgAudioContext?.state || "-"
     };
 }
 
@@ -3649,6 +3701,11 @@ function formatDebugInfo(d) {
             `     TRACK ${j+1}: ${t.readyState} | enabled=${t.enabled} | muted=${t.muted} | ${t.label}`
         ));
     });
+
+    lines.push("", "AUDIO UNLOCK");
+    lines.push(`  STATUS     : ${d.audioOutputUnlocked ? "UNLOCKED" : "LOCKED"}`);
+    lines.push(`  CONTEXT    : ${d.audioContextState}`);
+    lines.push(`  LAST ERROR : ${d.audioUnlockLastError}`);
 
     lines.push("", `AUDIO OUTPUT (${media.audios.length})`);
     if(!media.audios.length) lines.push("  - none");
@@ -3708,7 +3765,7 @@ setInterval(() => {
 
 
 // ========== DEBUG GLOBAL v2 ==========
-const DEBUG_UI_VERSION = "DEBUG-GLOBAL-v5-WEBRTC-MEDIA";
+const DEBUG_UI_VERSION = "DEBUG-GLOBAL-v6-AUDIO-UNLOCK";
 
 function ensureGlobalDebugUI() {
     if (!document.body) return;
@@ -3731,7 +3788,7 @@ function ensureGlobalDebugUI() {
         panel.id = "debugPanel";
         panel.innerHTML = `
             <div class="debug-head">
-                <strong>🛠 DEBUG GLOBAL v4 DBSYNC CLEAN</strong>
+                <strong>🛠 DEBUG GLOBAL v6 AUDIO UNLOCK</strong>
                 <div class="debug-actions">
                     <button class="debug-mini-btn" type="button" onclick="refreshDebugPanel()">↻ Refresh</button>
                     <button class="debug-mini-btn" type="button" onclick="copyDebugInfo()">📋 Copy</button>
