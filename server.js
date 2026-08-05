@@ -289,6 +289,37 @@ app.post('/api/auth/login', async (req,res) => {
     console.log('[USER] LOGIN:',u.username); res.json({ok:true,user:publicUser(u)});
   } catch(e){ console.error('[USER] LOGIN ERROR:',e.message); res.status(500).json({ok:false,message:'Login gagal.'}); }
 });
+app.post('/api/auth/me', async (req,res) => {
+  try {
+    const nama = String(req.body?.nama || '').trim();
+    const sandi = String(req.body?.sandi || '');
+    if(!nama || !sandi) return res.status(400).json({ok:false,message:'Nama dan password wajib diisi'});
+    if(!db) return res.status(503).json({ok:false,message:'Database tidak tersedia'});
+
+    const r = await db.query(`SELECT id,username,password_hash,role,active,banned,muted,created_at FROM users WHERE LOWER(username)=LOWER($1) LIMIT 1`, [nama]);
+    const u = r.rows[0];
+    if(!u || !(await verifyPassword(sandi, u.password_hash))) {
+      return res.status(401).json({ok:false,message:'Nama atau password salah'});
+    }
+    if(!u.active) return res.status(403).json({ok:false,message:'Akun dinonaktifkan'});
+    if(u.banned) return res.status(403).json({ok:false,message:'Akun dibanned'});
+
+    return res.json({ok:true,user:{
+      id:u.id,
+      nama:u.username,
+      role:u.role,
+      status:u.active ? 'aktif' : 'nonaktif',
+      banned:!!u.banned,
+      muted:!!u.muted,
+      createdAt:u.created_at
+    }});
+  } catch(e) {
+    console.error('[AUTH ME] ERROR:', e.message);
+    return res.status(500).json({ok:false,message:'Gagal memverifikasi user'});
+  }
+});
+
+
 app.get('/api/users', requireAdmin, async (req,res)=>{ if(!requireDb(res)) return; try { const r=await db.query(`SELECT * FROM users ORDER BY id ASC`); res.json({ok:true,users:r.rows.map(publicUser)}); } catch(e){res.status(500).json({ok:false,message:e.message});} });
 app.post('/api/users', requireAdmin, async (req,res)=>{ if(!requireDb(res)) return; try { const nama=String(req.body?.nama||'').trim(),sandi=String(req.body?.sandi||''); if(nama.length<2||sandi.length<4)return res.status(400).json({ok:false,message:'Nama/password tidak valid.'}); const h=await hashPassword(sandi); const r=await db.query(`INSERT INTO users(username,password_hash,role,active,banned,muted,created_by) VALUES($1,$2,'user',TRUE,FALSE,FALSE,$3) RETURNING *`,[nama,h,ADMIN_NAME]); console.log('[USER] ADMIN CREATE:',nama); await writeAudit(ADMIN_NAME,'BUAT USER',nama,'User dibuat melalui Admin Panel'); res.json({ok:true,user:publicUser(r.rows[0])}); } catch(e){ if(e.code==='23505')return res.status(409).json({ok:false,message:'Nama sudah terdaftar.'}); res.status(500).json({ok:false,message:e.message}); } });
 app.patch('/api/users/:id', requireAdmin, async (req,res)=>{ if(!requireDb(res)) return; try { const active=req.body?.status==='aktif', banned=!!req.body?.banned, muted=!!req.body?.muted; const r=await db.query(`UPDATE users SET active=$1,banned=$2,muted=$3,updated_at=NOW() WHERE id=$4 AND role<>'admin' RETURNING *`,[active,banned,muted,req.params.id]); if(!r.rows[0])return res.status(404).json({ok:false,message:'User tidak ditemukan/tidak dapat diubah.'}); console.log('[USER] UPDATE:',r.rows[0].username); await writeAudit(ADMIN_NAME,'UPDATE USER',r.rows[0].username,`status=${active?'aktif':'nonaktif'}, banned=${banned}, muted=${muted}`); res.json({ok:true,user:publicUser(r.rows[0])}); } catch(e){res.status(500).json({ok:false,message:e.message});} });
@@ -302,7 +333,7 @@ async function savePresence(s){ if(!db||!s)return; try{await db.query(`INSERT IN
 async function removePresence(id){if(!db)return;try{await db.query(`DELETE FROM online_sessions WHERE socket_id=$1`,[id]);}catch(e){console.error('[DB] removePresence:',e.message);}}
 function emitPresence(){io.emit('presence:update',publicSessions());}
 
-app.get('/health',async(req,res)=>{let database='disabled';if(db){try{await db.query('SELECT 1');database='connected';}catch{database='error';}}res.json({ok:true,service:'komunikasi-group-realtime',version:'2.7.1-H3-TOKEN-ONLY',database,time:new Date().toISOString(),users:sessions.size});});
+app.get('/health',async(req,res)=>{let database='disabled';if(db){try{await db.query('SELECT 1');database='connected';}catch{database='error';}}res.json({ok:true,service:'komunikasi-group-realtime',version:'2.7.2-H3.1-DUAL-AUTH',database,time:new Date().toISOString(),users:sessions.size});});
 
 // ===== ADMIN SYNC STAGE B: PostgreSQL Group/Channel API =====
 app.get('/api/config/groups', async (req,res) => {
