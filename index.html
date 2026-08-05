@@ -2698,7 +2698,7 @@ async function masukChannel(namaGrup, namaChannel) {
     startNetworkSpeedMonitor();
 
     navigator.mediaDevices.getUserMedia({audio:true, video:false})
-    .then(stream => {
+    .then(async stream => {
         streamSaya = stream;
         // PTT: mic OFF by default, user harus tekan PTT/SPACE
         streamSaya.getAudioTracks().forEach(track => track.enabled = false);
