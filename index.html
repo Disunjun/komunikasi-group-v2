@@ -2215,9 +2215,22 @@ function initRealtimeSocket() {
     });
     socket.on("presence:update", sessions => {
         serverSessions = normalizeServerSessions(sessions);
+
+        // G3.1: presence Socket.IO adalah sumber ONLINE realtime.
+        // Jangan biarkan summary hasil fetch sebelumnya menahan angka Online lama.
+        if(!serverAdminStats) serverAdminStats = { summary:{} };
+        if(!serverAdminStats.summary) serverAdminStats.summary = {};
+        serverAdminStats.summary.onlineUsers = Object.keys(serverSessions).length;
+        serverAdminStats.sessions = Object.values(serverSessions);
+
         updateStats();
-        if(adminTabAktif === 'monitoring') refreshMonitoring();
+
+        // Refresh tree langsung; aman walaupun tab Monitoring sedang tersembunyi.
+        refreshMonitoring();
+
+        // Activity/statistik PostgreSQL menyusul sesudah event realtime.
         scheduleAdminRealtimeSync("presence:update");
+        console.log("[G3.1] presence realtime:", Object.keys(serverSessions).length);
     });
     socket.on("room:error", e => toast("❌ " + (e?.message || "Gagal masuk room"), "merah", 6000));
     socket.on("admin:kick", () => { toast("Anda telah di-kick oleh admin!", "merah", 5000); keluarChannel(); });
@@ -3864,7 +3877,7 @@ setInterval(() => {
 
 // ========== DEBUG GLOBAL v2 ==========
 const DEBUG_UI_VERSION = "DEBUG-GLOBAL-v6-AUDIO-UNLOCK";
-const FRONTEND_BUILD = "2.6.1-G3-REALTIME-ADMIN-SYNC";
+const FRONTEND_BUILD = "2.6.2-G3.1-REALTIME-FIX";
 
 function ensureGlobalDebugUI() {
     if (!document.body) return;
