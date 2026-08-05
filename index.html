@@ -1174,7 +1174,7 @@ async function daftarAkun() {
     } catch(err) { toast(`❌ ${err.message}`, "merah"); }
 }
 
-async async function masukSistem() {
+async function masukSistem() {
     const nama = document.getElementById("loginNama").value.trim();
     const sandi = document.getElementById("loginPass").value;
     if(!nama || !sandi) return toast("❌ Isi Nama dan Kata Sandi!", "merah");
