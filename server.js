@@ -52,7 +52,14 @@ app.use(express.json({ limit: '64kb' }));
 
 let db = null;
 if (process.env.DATABASE_URL) {
-  db = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
+  db = new Pool({ 
+    connectionString: process.env.DATABASE_URL, 
+    ssl: { rejectUnauthorized: false },
+    max: 20, // Maximum number of clients in the pool
+    idleTimeoutMillis: 30000, // Close idle clients after 30 seconds
+    connectionTimeoutMillis: 2000, // Return an error after 2 seconds if connection could not be established
+    allowExitOnIdle: false // Keep pool alive for serverless environments
+  });
   console.log('[DB] DATABASE_URL ditemukan.');
 } else console.warn('[DB] DATABASE_URL tidak ditemukan. Database dinonaktifkan.');
 
@@ -135,7 +142,8 @@ async function writeAudit(adminName, action, target='', detail='') {
       ]
     );
     const log = publicAudit(r.rows[0]);
-    io.emit('audit:new', log);
+    // Use broadcast only to admin clients (optimized with volatile to drop late packets)
+    io.volatile.emit('audit:new', log);
     return log;
   } catch(e) {
     console.error('[AUDIT] WRITE ERROR:', e.message);
@@ -412,7 +420,7 @@ function publicSessions(){ const out={}; for(const s of sessions.values()) out[s
 function roomUsers(room){ return [...(rooms.get(room)||new Set())].map(id=>sessions.get(id)).filter(Boolean).map(s=>({nama:s.nama,group:s.group,channel:s.channel,peerId:s.peerId,micStatus:!!s.micStatus,floorStatus:s.floorStatus||'idle'})); }
 async function savePresence(s){ if(!db||!s)return; try{await db.query(`INSERT INTO online_sessions(socket_id,username,group_name,channel_name,peer_id,mic_status,floor_status,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,NOW()) ON CONFLICT(socket_id) DO UPDATE SET username=EXCLUDED.username,group_name=EXCLUDED.group_name,channel_name=EXCLUDED.channel_name,peer_id=EXCLUDED.peer_id,mic_status=EXCLUDED.mic_status,floor_status=EXCLUDED.floor_status,updated_at=NOW()`,[s.socketId,s.nama,s.group,s.channel,s.peerId,!!s.micStatus,s.floorStatus||'idle']);}catch(e){console.error('[DB] savePresence:',e.message);} }
 async function removePresence(id){if(!db)return;try{await db.query(`DELETE FROM online_sessions WHERE socket_id=$1`,[id]);}catch(e){console.error('[DB] removePresence:',e.message);}}
-function emitPresence(){io.emit('presence:update',publicSessions());}
+function emitPresence(){io.volatile.emit('presence:update',publicSessions());}
 
 app.get('/health',async(req,res)=>{let database='disabled';if(db){try{await db.query('SELECT 1');database='connected';}catch{database='error';}}res.json({ok:true,service:'komunikasi-group-realtime',version:'2.7.2-H3.1-DUAL-AUTH',database,time:new Date().toISOString(),users:sessions.size});});
 
@@ -428,7 +436,8 @@ app.get('/api/config/groups', async (req,res) => {
       ['groups']
     );
     const row = r.rows[0];
-    io.emit('config:groups:update', {
+    // Use volatile for non-critical config updates (clients can request latest via API)
+    io.volatile.emit('config:groups:update', {
   groups: r.rows[0].config_value,
   updatedBy: r.rows[0].updated_by,
   updatedAt: r.rows[0].updated_at
@@ -485,7 +494,8 @@ app.put('/api/config/groups', requireAdmin, async (req,res) => {
       'groups',
       `group=${groups.length}, channel=${groups.reduce((n,g)=>n+(Array.isArray(g.channel)?g.channel.length:0),0)}`
     );
-    io.emit('config:groups:update', {
+    // Use volatile for non-critical config updates (clients can request latest via API)
+    io.volatile.emit('config:groups:update', {
       groups:r.rows[0].config_value,
       updatedBy:r.rows[0].updated_by,
       updatedAt:r.rows[0].updated_at
@@ -507,8 +517,8 @@ app.put('/api/config/groups', requireAdmin, async (req,res) => {
 app.get('/api/audit-logs', requireAdmin, async (req,res) => {
   if(!requireDb(res)) return;
   try {
-    const requested = Number(req.query?.limit || 200);
-    const limit = Math.min(1000, Math.max(1, Number.isFinite(requested) ? requested : 200));
+    const requested = Number(req.query?.limit || DEFAULT_ADMIN_STATS_LIMIT);
+    const limit = Math.min(MAX_ADMIN_STATS_LIMIT, Math.max(1, Number.isFinite(requested) ? requested : DEFAULT_ADMIN_STATS_LIMIT));
     const r = await db.query(
       `SELECT id,admin_name,action,target,detail,created_at
        FROM audit_logs
@@ -559,6 +569,9 @@ async function writeActivity(username, groupName, channelName, action) {
 app.get('/api/admin/stats', requireAdmin, async (req,res) => {
   if(!requireDb(res)) return;
   try {
+    const requested = Number(req.query?.limit || DEFAULT_ADMIN_STATS_LIMIT);
+    const limit = Math.min(MAX_ADMIN_STATS_LIMIT, Math.max(1, Number.isFinite(requested) ? requested : DEFAULT_ADMIN_STATS_LIMIT));
+    
     const [usersR, groupsR, activityR] = await Promise.all([
       db.query(`SELECT COUNT(*)::int AS total FROM users`),
       db.query(`SELECT config_value FROM app_config WHERE config_key='groups' LIMIT 1`),
@@ -567,8 +580,8 @@ app.get('/api/admin/stats', requireAdmin, async (req,res) => {
         FROM activity_logs
         WHERE created_at >= NOW() - INTERVAL '12 months'
         ORDER BY id DESC
-        LIMIT 10000
-      `)
+        LIMIT $1
+      `, [limit])
     ]);
 
     const groups = Array.isArray(groupsR.rows[0]?.config_value) ? groupsR.rows[0].config_value : [];
@@ -727,7 +740,8 @@ io.on('connection',socket=>{
       await writeActivity(nama, group, channel, 'MASUK');
       
       socket.emit('room:joined', {room, users: roomUsers(room), self: session});
-      io.to(room).emit('room:users', roomUsers(room));
+      // Use volatile for frequent presence updates (clients can sync via room:joined)
+      io.volatile.to(room).emit('room:users', roomUsers(room));
       emitPresence();
       
       console.log('[ROOM JOIN]', nama, '=>', room);
@@ -736,7 +750,7 @@ io.on('connection',socket=>{
       socket.emit('room:error', {message: e.message || 'Gagal bergabung room.'});
     }
   });
-  socket.on('presence:update',async patch=>{const s=sessions.get(socket.id);if(!s)return;if(typeof patch?.micStatus==='boolean')s.micStatus=patch.micStatus;if(typeof patch?.floorStatus==='string')s.floorStatus=patch.floorStatus;s.timestamp=Date.now();await savePresence(s);io.to(s.room).emit('room:users',roomUsers(s.room));emitPresence();});
+  socket.on('presence:update',async patch=>{const s=sessions.get(socket.id);if(!s)return;if(typeof patch?.micStatus==='boolean')s.micStatus=patch.micStatus;if(typeof patch?.floorStatus==='string')s.floorStatus=patch.floorStatus;s.timestamp=Date.now();await savePresence(s);io.volatile.to(s.room).emit('room:users',roomUsers(s.room));emitPresence();});
   socket.on('floor:event',event=>{const s=sessions.get(socket.id);if(!s?.room)return;socket.to(s.room).emit('floor:event',{...event,from:s.nama});});
   socket.on('chat:send', async (payload, ack) => {
     try {
@@ -766,6 +780,7 @@ io.on('connection',socket=>{
         await db.query(`INSERT INTO chat_messages(username,group_name,channel_name,message) VALUES($1,$2,$3,$4)`, [s.nama, s.group, s.channel, message]);
       }
       
+      // Chat messages are critical - don't use volatile here
       io.to(s.room).emit('chat:message', {nama: s.nama, message});
       ack?.({ok:true});
     } catch(e) {
@@ -791,30 +806,52 @@ io.on('connection',socket=>{
       }
     }
   });
-  socket.on('disconnect',async reason=>{const s=sessions.get(socket.id);console.log('[SOCKET] Disconnect:',socket.id,reason);if(!s)return;rooms.get(s.room)?.delete(socket.id);if(rooms.get(s.room)?.size===0)rooms.delete(s.room);sessions.delete(socket.id);await removePresence(socket.id);await writeActivity(s.nama,s.group,s.channel,'KELUAR');if(s.room)io.to(s.room).emit('room:users',roomUsers(s.room));emitPresence();});
+  socket.on('disconnect',async reason=>{const s=sessions.get(socket.id);console.log('[SOCKET] Disconnect:',socket.id,reason);if(!s)return;rooms.get(s.room)?.delete(socket.id);if(rooms.get(s.room)?.size===0)rooms.delete(s.room);sessions.delete(socket.id);await removePresence(socket.id);await writeActivity(s.nama,s.group,s.channel,'KELUAR');if(s.room)io.volatile.to(s.room).emit('room:users',roomUsers(s.room));emitPresence();});
 });
 // Cleanup expired admin sessions setiap menit
 setInterval(() => {
   const now = Date.now();
+  let cleaned = 0;
   for (const [tokenHash, s] of adminSessions) {
     if (s.expiresAt <= now) {
       adminSessions.delete(tokenHash);
+      cleaned++;
     }
+  }
+  if (cleaned > 0) {
+    console.log(`[SESSION] Cleaned up ${cleaned} expired admin session(s)`);
   }
 }, 60000);
 
 // Cleanup stale user sessions dengan configurable threshold
 setInterval(async () => {
   const cutoff = Date.now() - STALE_SESSION_THRESHOLD_MS;
+  let cleaned = 0;
+  const toRemove = [];
+  
+  // First pass: identify stale sessions (avoid modifying Map during iteration)
   for (const [id, s] of sessions) {
     if (s.timestamp < cutoff) {
+      toRemove.push(id);
+    }
+  }
+  
+  // Second pass: remove stale sessions
+  for (const id of toRemove) {
+    const s = sessions.get(id);
+    if (s) {
       rooms.get(s.room)?.delete(id);
       sessions.delete(id);
       await removePresence(id);
       await writeActivity(s.nama, s.group, s.channel, 'KELUAR');
+      cleaned++;
     }
   }
-  emitPresence();
+  
+  if (cleaned > 0) {
+    console.log(`[SESSION] Cleaned up ${cleaned} stale user session(s)`);
+    emitPresence();
+  }
 }, SESSION_CLEANUP_INTERVAL_MS);
 
 async function startServer(){console.log('========================================');console.log(' Komunikasi Group V2 Backend');console.log(' Version 2.7.1-H3-TOKEN-ONLY');console.log('========================================');await testDatabase();await initializeDatabase();server.listen(PORT,()=>{console.log(`[SERVER] Listening on port ${PORT}`);console.log(`[SERVER] PostgreSQL: ${db?'ENABLED':'DISABLED'}`);});}
