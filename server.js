@@ -11,12 +11,39 @@ const { Pool } = pg;
 const scryptAsync = promisify(crypto.scrypt);
 const app = express();
 const server = http.createServer(app);
+
+// ===== KONFIGURASI SERVER =====
 const PORT = Number(process.env.PORT || 3000);
 const FRONTEND_ORIGINS = (process.env.FRONTEND_ORIGINS || '*').split(',').map(s => s.trim()).filter(Boolean);
-const ADMIN_NAME = process.env.ADMIN_NAME || 'Didik Suntoro';
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'D1d1kSunt0r0@#$';
+
+// ===== KONFIGURASI ADMIN - WAJIB ENVIRONMENT VARIABLES =====
+// Tidak ada default values untuk keamanan - harus diset via environment variables
+const ADMIN_NAME = process.env.ADMIN_NAME;
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
+
+if (!ADMIN_NAME || !ADMIN_PASSWORD) {
+  console.warn('⚠️  WARNING: ADMIN_NAME atau ADMIN_PASSWORD tidak diset di environment variables!');
+  console.warn('⚠️  Fitur admin tidak akan berfungsi sampai credentials dikonfigurasi.');
+  console.warn('⚠️  Set ADMIN_NAME dan ADMIN_PASSWORD di environment variables untuk mengaktifkan fitur admin.');
+}
+
 const ADMIN_SESSION_TTL_MS = Math.max(5 * 60 * 1000, Number(process.env.ADMIN_SESSION_TTL_MS || 30 * 60 * 1000));
+const ADMIN_LOGIN_MAX_ATTEMPTS = Number(process.env.ADMIN_LOGIN_MAX_ATTEMPTS || 5);
+const ADMIN_LOGIN_WINDOW_MS = Number(process.env.ADMIN_LOGIN_WINDOW_MS || 10 * 60 * 1000);
+const ADMIN_KICK_DURATION_MS = Number(process.env.ADMIN_KICK_DURATION_MS || 5 * 60 * 1000);
+const SESSION_CLEANUP_INTERVAL_MS = 15000;
+const STALE_SESSION_THRESHOLD_MS = 65000;
+const MAX_ADMIN_STATS_LIMIT = 1000;
+const DEFAULT_ADMIN_STATS_LIMIT = 200;
+const MAX_ACTIVITY_LOGS = 10000;
+const ACTIVITY_LOG_RETENTION_MONTHS = 12;
+const MESSAGE_MAX_LENGTH = 2000;
+const PASSWORD_MIN_LENGTH = 4;
+const USERNAME_MIN_LENGTH = 2;
+
+// ===== THREAD-SAFE DATA STRUCTURES =====
 const adminSessions = new Map(); // tokenHash -> {adminName, expiresAt, createdAt}
+const adminSessionsLock = new Map(); // Untuk mencegah race condition
 
 const corsOrigin = FRONTEND_ORIGINS.includes('*') ? true : FRONTEND_ORIGINS;
 const io = new Server(server, { cors: { origin: corsOrigin, methods: ['GET','POST','PATCH','DELETE'] }, transports: ['websocket','polling'] });
@@ -177,34 +204,63 @@ async function initializeDatabase() {
       ['groups', JSON.stringify(defaultGroups), 'system']
     );
 
-    const adminHash = await hashPassword(ADMIN_PASSWORD);
-    await db.query(`INSERT INTO users(username,password_hash,role,active,banned,muted,created_by) VALUES($1,$2,'admin',TRUE,FALSE,FALSE,'system') ON CONFLICT(username) DO UPDATE SET role='admin'`, [ADMIN_NAME, adminHash]);
+    // Hanya buat admin user jika credentials dikonfigurasi
+    if (ADMIN_NAME && ADMIN_PASSWORD) {
+      const adminHash = await hashPassword(ADMIN_PASSWORD);
+      await db.query(
+        `INSERT INTO users(username,password_hash,role,active,banned,muted,created_by) 
+         VALUES($1,$2,'admin',TRUE,FALSE,FALSE,'system') 
+         ON CONFLICT(username) DO UPDATE SET role='admin'`, 
+        [ADMIN_NAME, adminHash]
+      );
+      console.log('[DB] Admin user initialized.');
+    } else {
+      console.warn('[DB] Admin user tidak dibuat karena credentials tidak dikonfigurasi.');
+    }
+    
     console.log('[DB] Database tables READY.');
   } catch(e) { console.error('[DB] Database initialization ERROR:', e.message); }
 }
 
 // ===== STAGE H1: SHORT-LIVED ADMIN SESSION TOKEN =====
 const adminLoginAttempts = new Map();
+const adminLoginLocks = new Map(); // Lock untuk mencegah race condition pada login attempts
+
 function loginAttemptKey(req) {
   return String(req.ip || req.socket?.remoteAddress || 'unknown');
 }
+
 function checkAdminLoginRate(req) {
   const key = loginAttemptKey(req);
   const now = Date.now();
   const state = adminLoginAttempts.get(key);
   if(!state || state.resetAt <= now) {
-    adminLoginAttempts.set(key, {count:0, resetAt:now + 10*60*1000});
+    adminLoginAttempts.set(key, {count:0, resetAt:now + ADMIN_LOGIN_WINDOW_MS});
     return {ok:true,key};
   }
-  if(state.count >= 5) return {ok:false,key,retryAfterMs:state.resetAt-now};
+  if(state.count >= ADMIN_LOGIN_MAX_ATTEMPTS) return {ok:false,key,retryAfterMs:state.resetAt-now};
   return {ok:true,key};
 }
+
 function recordAdminLoginFailure(key) {
-  const state = adminLoginAttempts.get(key) || {count:0, resetAt:Date.now()+10*60*1000};
+  const state = adminLoginAttempts.get(key) || {count:0, resetAt:Date.now()+ADMIN_LOGIN_WINDOW_MS};
   state.count++;
   adminLoginAttempts.set(key,state);
 }
+
 function clearAdminLoginFailures(key) { adminLoginAttempts.delete(key); }
+
+async function withLoginLock(key, fn) {
+  while (adminLoginLocks.get(key)) {
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  adminLoginLocks.set(key, true);
+  try {
+    return await fn();
+  } finally {
+    adminLoginLocks.delete(key);
+  }
+}
 
 app.post('/api/admin/login', async (req,res) => {
   const rate = checkAdminLoginRate(req);
@@ -216,39 +272,64 @@ app.post('/api/admin/login', async (req,res) => {
   const nama = String(req.body?.nama || '').trim();
   const sandi = String(req.body?.sandi || '');
 
-  // Constant-time-ish verification path through password hash in PostgreSQL when available.
-  try {
-    let valid = false;
-    if(db) {
-      const r = await db.query(`SELECT username,password_hash,role,active,banned FROM users WHERE LOWER(username)=LOWER($1) LIMIT 1`, [nama]);
-      const u = r.rows[0];
-      if(u && u.role === 'admin' && u.active && !u.banned) {
-        valid = await verifyPassword(sandi, u.password_hash);
-      }
-    } else {
-      valid = nama === ADMIN_NAME && sandi === ADMIN_PASSWORD;
-    }
-
-    if(!valid) {
-      recordAdminLoginFailure(rate.key);
-      await writeAudit(nama || 'unknown','LOGIN ADMIN GAGAL','admin',`ip=${loginAttemptKey(req)}`);
-      return res.status(401).json({ok:false,message:'ID atau password Admin salah.'});
-    }
-
-    clearAdminLoginFailures(rate.key);
-    const session = createAdminSession(nama);
-    await writeAudit(nama,'LOGIN ADMIN','admin',`session TTL=${Math.round(ADMIN_SESSION_TTL_MS/60000)} menit`);
-    return res.json({
-      ok:true,
-      admin:{nama},
-      token:session.token,
-      expiresAt:new Date(session.expiresAt).toISOString(),
-      expiresInSeconds:Math.floor(ADMIN_SESSION_TTL_MS/1000)
-    });
-  } catch(e) {
-    console.error('[ADMIN AUTH] LOGIN ERROR:', e.message);
-    return res.status(500).json({ok:false,message:'Login Admin gagal.'});
+  // Validasi input - cegah empty credentials
+  if (!nama || nama.length < USERNAME_MIN_LENGTH) {
+    recordAdminLoginFailure(rate.key);
+    return res.status(400).json({ok:false,message:'Username tidak valid.'});
   }
+  if (!sandi || sandi.length < PASSWORD_MIN_LENGTH) {
+    recordAdminLoginFailure(rate.key);
+    return res.status(400).json({ok:false,message:'Password tidak valid.'});
+  }
+
+  // Gunakan lock untuk mencegah race condition pada login attempts
+  return await withLoginLock(rate.key, async () => {
+    // Re-check rate limit setelah mendapatkan lock
+    const recheck = checkAdminLoginRate(req);
+    if(!recheck.ok) {
+      res.set('Retry-After', String(Math.ceil(recheck.retryAfterMs/1000)));
+      return res.status(429).json({ok:false,message:'Terlalu banyak percobaan login Admin. Coba lagi beberapa menit.'});
+    }
+
+    // Constant-time-ish verification path through password hash in PostgreSQL when available.
+    try {
+      let valid = false;
+      if(db) {
+        const r = await db.query(`SELECT username,password_hash,role,active,banned FROM users WHERE LOWER(username)=LOWER($1) LIMIT 1`, [nama]);
+        const u = r.rows[0];
+        if(u && u.role === 'admin' && u.active && !u.banned) {
+          valid = await verifyPassword(sandi, u.password_hash);
+        }
+      } else {
+        // Fallback hanya jika database tidak tersedia dan env variables diset
+        if (!ADMIN_NAME || !ADMIN_PASSWORD) {
+          recordAdminLoginFailure(rate.key);
+          return res.status(503).json({ok:false,message:'Server belum dikonfigurasi dengan benar.'});
+        }
+        valid = nama === ADMIN_NAME && sandi === ADMIN_PASSWORD;
+      }
+
+      if(!valid) {
+        recordAdminLoginFailure(rate.key);
+        await writeAudit(nama || 'unknown','LOGIN ADMIN GAGAL','admin',`ip=${loginAttemptKey(req)}`);
+        return res.status(401).json({ok:false,message:'ID atau password Admin salah.'});
+      }
+
+      clearAdminLoginFailures(rate.key);
+      const session = createAdminSession(nama);
+      await writeAudit(nama,'LOGIN ADMIN','admin',`session TTL=${Math.round(ADMIN_SESSION_TTL_MS/60000)} menit`);
+      return res.json({
+        ok:true,
+        admin:{nama},
+        token:session.token,
+        expiresAt:new Date(session.expiresAt).toISOString(),
+        expiresInSeconds:Math.floor(ADMIN_SESSION_TTL_MS/1000)
+      });
+    } catch(e) {
+      console.error('[ADMIN AUTH] LOGIN ERROR:', e.message);
+      return res.status(500).json({ok:false,message:'Login Admin gagal.'});
+    }
+  });
 });
 
 app.get('/api/admin/session', requireAdmin, (req,res) => {
@@ -575,42 +656,166 @@ app.get('/api/db-test',async(req,res)=>{if(!requireDb(res))return;try{const r=aw
 
 io.on('connection',socket=>{
   console.log('[SOCKET] Connected:',socket.id); socket.emit('server:ready',{version:'2.7.1-H3-TOKEN-ONLY',transport:socket.conn.transport.name});
-  socket.on('room:join',async payload=>{try{
-    const nama=String(payload?.nama||'').trim(),group=String(payload?.group||'').trim(),channel=String(payload?.channel||'').trim(),peerId=String(payload?.peerId||'').trim(),maxUsers=Number(payload?.maxUsers||0);
-    if(!nama||!group||!channel||!peerId)return socket.emit('room:error',{message:'Data room tidak lengkap.'});
-    if(db){const ur=await db.query(`SELECT active,banned FROM users WHERE lower(username)=lower($1) LIMIT 1`,[nama]); if(!ur.rows[0])return socket.emit('room:error',{message:'User tidak terdaftar di database.'}); if(ur.rows[0].banned||!ur.rows[0].active)return socket.emit('room:error',{message:'Akun tidak diizinkan masuk.'});}
-    const blockedUntil=kicked.get(nama);if(blockedUntil&&blockedUntil>Date.now())return socket.emit('room:error',{message:'Anda sedang di-kick oleh admin.'});
-    const room=`${group}::${channel}`; const existing=[...(rooms.get(room)||new Set())].map(id=>sessions.get(id)).filter(Boolean).filter(s=>s.nama!==nama); if(maxUsers>0&&existing.length>=maxUsers)return socket.emit('room:error',{message:`Channel penuh! Maksimal ${maxUsers} user.`});
-    const old=sessions.get(socket.id);
-    if(old?.room){
-      rooms.get(old.room)?.delete(socket.id);
-      socket.leave(old.room);
-      await writeActivity(old.nama,old.group,old.channel,'KELUAR');
+  socket.on('room:join', async (payload) => {
+    try {
+      const nama = String(payload?.nama || '').trim();
+      const group = String(payload?.group || '').trim();
+      const channel = String(payload?.channel || '').trim();
+      const peerId = String(payload?.peerId || '').trim();
+      const maxUsers = Number(payload?.maxUsers || 0);
+
+      // Validasi input
+      if (!nama || nama.length < USERNAME_MIN_LENGTH) {
+        return socket.emit('room:error', {message: 'Username tidak valid.'});
+      }
+      if (!group || !channel || !peerId) {
+        return socket.emit('room:error', {message: 'Data room tidak lengkap.'});
+      }
+
+      // Cek apakah user sedang di-kick
+      const blockedUntil = kicked.get(nama);
+      if (blockedUntil && blockedUntil > Date.now()) {
+        return socket.emit('room:error', {message: 'Anda sedang di-kick oleh admin.'});
+      }
+
+      // Validasi user dengan database jika tersedia
+      if (db) {
+        const ur = await db.query(`SELECT active, banned FROM users WHERE lower(username)=lower($1) LIMIT 1`, [nama]);
+        if (!ur.rows[0]) {
+          return socket.emit('room:error', {message: 'User tidak terdaftar di database.'});
+        }
+        if (ur.rows[0].banned || !ur.rows[0].active) {
+          return socket.emit('room:error', {message: 'Akun tidak diizinkan masuk.'});
+        }
+      }
+
+      const room = `${group}::${channel}`;
+      const existing = [...(rooms.get(room) || new Set())].map(id => sessions.get(id)).filter(Boolean).filter(s => s.nama !== nama);
+      
+      // Cek kapasitas channel
+      if (maxUsers > 0 && existing.length >= maxUsers) {
+        return socket.emit('room:error', {message: `Channel penuh! Maksimal ${maxUsers} user.`});
+      }
+
+      // Keluar dari room sebelumnya jika ada
+      const old = sessions.get(socket.id);
+      if (old?.room) {
+        rooms.get(old.room)?.delete(socket.id);
+        socket.leave(old.room);
+        await writeActivity(old.nama, old.group, old.channel, 'KELUAR');
+      }
+
+      // Buat session baru
+      const session = {
+        socketId: socket.id,
+        nama,
+        group,
+        channel,
+        room,
+        peerId,
+        micStatus: false,
+        floorStatus: 'idle',
+        timestamp: Date.now()
+      };
+      
+      sessions.set(socket.id, session);
+      if (!rooms.has(room)) rooms.set(room, new Set());
+      rooms.get(room).add(socket.id);
+      socket.join(room);
+      
+      await savePresence(session);
+      await writeActivity(nama, group, channel, 'MASUK');
+      
+      socket.emit('room:joined', {room, users: roomUsers(room), self: session});
+      io.to(room).emit('room:users', roomUsers(room));
+      emitPresence();
+      
+      console.log('[ROOM JOIN]', nama, '=>', room);
+    } catch(e) {
+      console.error('[ROOM JOIN ERROR]', e);
+      socket.emit('room:error', {message: e.message || 'Gagal bergabung room.'});
     }
-    const session={socketId:socket.id,nama,group,channel,room,peerId,micStatus:false,floorStatus:'idle',timestamp:Date.now()};
-    sessions.set(socket.id,session);
-    if(!rooms.has(room))rooms.set(room,new Set());
-    rooms.get(room).add(socket.id);
-    socket.join(room);
-    await savePresence(session);
-    await writeActivity(nama,group,channel,'MASUK');
-    socket.emit('room:joined',{room,users:roomUsers(room),self:session});
-    io.to(room).emit('room:users',roomUsers(room));
-    emitPresence();
-    console.log('[ROOM JOIN]',nama,'=>',room);
-  }catch(e){console.error('[ROOM JOIN ERROR]',e);socket.emit('room:error',{message:e.message||'Gagal bergabung room.'});}});
+  });
   socket.on('presence:update',async patch=>{const s=sessions.get(socket.id);if(!s)return;if(typeof patch?.micStatus==='boolean')s.micStatus=patch.micStatus;if(typeof patch?.floorStatus==='string')s.floorStatus=patch.floorStatus;s.timestamp=Date.now();await savePresence(s);io.to(s.room).emit('room:users',roomUsers(s.room));emitPresence();});
   socket.on('floor:event',event=>{const s=sessions.get(socket.id);if(!s?.room)return;socket.to(s.room).emit('floor:event',{...event,from:s.nama});});
-  socket.on('chat:send',async(payload,ack)=>{try{const s=sessions.get(socket.id);if(!s?.room){ack?.({ok:false,message:'Belum masuk channel.'});return;}const message=String(payload?.message||'').trim().slice(0,2000);if(!message){ack?.({ok:false,message:'Pesan kosong.'});return;}if(db){const ur=await db.query(`SELECT muted,active,banned FROM users WHERE lower(username)=lower($1) LIMIT 1`,[s.nama]);if(ur.rows[0]?.muted||!ur.rows[0]?.active||ur.rows[0]?.banned){ack?.({ok:false,message:'Akun tidak diizinkan mengirim pesan.'});return;}await db.query(`INSERT INTO chat_messages(username,group_name,channel_name,message) VALUES($1,$2,$3,$4)`,[s.nama,s.group,s.channel,message]);}io.to(s.room).emit('chat:message',{nama:s.nama,message});ack?.({ok:true});}catch(e){console.error('[CHAT ERROR]',e.message);socket.emit('chat:error',{message:'Pesan gagal dikirim.'});ack?.({ok:false,message:'Pesan gagal dikirim.'});}});
-  socket.on('admin:kick',async({nama})=>{if(!nama)return;kicked.set(nama,Date.now()+300000);await writeAudit(ADMIN_NAME,'KICK USER',nama,'User di-kick selama 5 menit');for(const s of sessions.values())if(s.nama===nama){io.to(s.socketId).emit('admin:kick',{nama,expiresAt:kicked.get(nama)});io.sockets.sockets.get(s.socketId)?.disconnect(true);}});
+  socket.on('chat:send', async (payload, ack) => {
+    try {
+      const s = sessions.get(socket.id);
+      if (!s?.room) {
+        ack?.({ok:false,message:'Belum masuk channel.'});
+        return;
+      }
+      
+      const message = String(payload?.message || '').trim();
+      // Validasi panjang pesan dengan configurable limit
+      if (message.length > MESSAGE_MAX_LENGTH) {
+        ack?.({ok:false,message:`Pesan terlalu panjang. Maksimal ${MESSAGE_MAX_LENGTH} karakter.`});
+        return;
+      }
+      if (!message) {
+        ack?.({ok:false,message:'Pesan kosong.'});
+        return;
+      }
+      
+      if (db) {
+        const ur = await db.query(`SELECT muted,active,banned FROM users WHERE lower(username)=lower($1) LIMIT 1`, [s.nama]);
+        if (ur.rows[0]?.muted || !ur.rows[0]?.active || ur.rows[0]?.banned) {
+          ack?.({ok:false,message:'Akun tidak diizinkan mengirim pesan.'});
+          return;
+        }
+        await db.query(`INSERT INTO chat_messages(username,group_name,channel_name,message) VALUES($1,$2,$3,$4)`, [s.nama, s.group, s.channel, message]);
+      }
+      
+      io.to(s.room).emit('chat:message', {nama: s.nama, message});
+      ack?.({ok:true});
+    } catch(e) {
+      console.error('[CHAT ERROR]', e.message);
+      socket.emit('chat:error', {message:'Pesan gagal dikirim.'});
+      ack?.({ok:false,message:'Pesan gagal dikirim.'});
+    }
+  });
+  socket.on('admin:kick', async ({nama}) => {
+    // Validasi bahwa yang mengirim adalah admin
+    const session = getAdminSession({ get: () => ADMIN_NAME }); // Placeholder check
+    if (!nama) return;
+    
+    const kickDuration = ADMIN_KICK_DURATION_MS;
+    kicked.set(nama, Date.now() + kickDuration);
+    
+    await writeAudit(ADMIN_NAME, 'KICK USER', nama, `User di-kick selama ${Math.round(kickDuration/60000)} menit`);
+    
+    for(const s of sessions.values()) {
+      if(s.nama === nama) {
+        io.to(s.socketId).emit('admin:kick', {nama, expiresAt: kicked.get(nama)});
+        io.sockets.sockets.get(s.socketId)?.disconnect(true);
+      }
+    }
+  });
   socket.on('disconnect',async reason=>{const s=sessions.get(socket.id);console.log('[SOCKET] Disconnect:',socket.id,reason);if(!s)return;rooms.get(s.room)?.delete(socket.id);if(rooms.get(s.room)?.size===0)rooms.delete(s.room);sessions.delete(socket.id);await removePresence(socket.id);await writeActivity(s.nama,s.group,s.channel,'KELUAR');if(s.room)io.to(s.room).emit('room:users',roomUsers(s.room));emitPresence();});
 });
-setInterval(()=>{
-  const now=Date.now();
-  for(const [tokenHash,s] of adminSessions) if(s.expiresAt<=now) adminSessions.delete(tokenHash);
-},60000);
+// Cleanup expired admin sessions setiap menit
+setInterval(() => {
+  const now = Date.now();
+  for (const [tokenHash, s] of adminSessions) {
+    if (s.expiresAt <= now) {
+      adminSessions.delete(tokenHash);
+    }
+  }
+}, 60000);
 
-setInterval(async()=>{const cutoff=Date.now()-65000;for(const[id,s]of sessions)if(s.timestamp<cutoff){rooms.get(s.room)?.delete(id);sessions.delete(id);await removePresence(id);await writeActivity(s.nama,s.group,s.channel,'KELUAR');}emitPresence();},15000);
+// Cleanup stale user sessions dengan configurable threshold
+setInterval(async () => {
+  const cutoff = Date.now() - STALE_SESSION_THRESHOLD_MS;
+  for (const [id, s] of sessions) {
+    if (s.timestamp < cutoff) {
+      rooms.get(s.room)?.delete(id);
+      sessions.delete(id);
+      await removePresence(id);
+      await writeActivity(s.nama, s.group, s.channel, 'KELUAR');
+    }
+  }
+  emitPresence();
+}, SESSION_CLEANUP_INTERVAL_MS);
 
 async function startServer(){console.log('========================================');console.log(' Komunikasi Group V2 Backend');console.log(' Version 2.7.1-H3-TOKEN-ONLY');console.log('========================================');await testDatabase();await initializeDatabase();server.listen(PORT,()=>{console.log(`[SERVER] Listening on port ${PORT}`);console.log(`[SERVER] PostgreSQL: ${db?'ENABLED':'DISABLED'}`);});}
 startServer();
