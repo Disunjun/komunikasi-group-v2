@@ -888,7 +888,8 @@
 
 // ========== KONFIGURASI & STATE ==========
 const ADMIN_NAMA = "Didik Suntoro";
-let userLoginPassword = "";
+let userToken = sessionStorage.getItem("kgUserToken") || "";
+let userTokenExpiresAt = sessionStorage.getItem("kgUserTokenExpiresAt") || "";
 let adminToken = sessionStorage.getItem("kgAdminToken") || "";
 let adminTokenExpiresAt = sessionStorage.getItem("kgAdminTokenExpiresAt") || "";
 let namaSaya = "", channelAktif = "", grupAktif = "", peer = null, koneksi = {}, streamSaya = null;
@@ -923,8 +924,6 @@ let monitoringInterval = null;
 // ========== REALTIME SERVER V2 ==========
 const REALTIME_SERVER_URL = window.REALTIME_SERVER_URL || "https://komunikasi-group-v2-production.up.railway.app";
 let socket = null;
-let channelCountSocket = null;
-let channelPresenceSessions = {};
 let serverSessions = {};
 let serverAdminStats = null;
 let serverActivityLogs = [];
@@ -1143,11 +1142,12 @@ async function keluarSistem() {
     sessionStorage.removeItem("kgAdminToken");
     sessionStorage.removeItem("kgAdminTokenExpiresAt");
     namaSaya = "";
-    userLoginPassword = "";
+    userToken = "";
+    userTokenExpiresAt = "";
+    sessionStorage.removeItem("kgUserToken");
+    sessionStorage.removeItem("kgUserTokenExpiresAt");
     if(monitoringInterval) clearInterval(monitoringInterval);
     if(socket) { try { socket.disconnect(); } catch(_) {} }
-    if(channelCountSocket) { try { channelCountSocket.disconnect(); } catch(_) {} channelCountSocket = null; }
-    channelPresenceSessions = {};
     tampilHalaman("halamanMasuk");
     toast("Berhasil keluar", "hijau");
 }
@@ -1156,23 +1156,36 @@ function kembaliKeMasuk() { tampilHalaman("halamanMasuk"); }
 // ========== AUTH & LOGIN (POSTGRESQL) ==========
 async function apiRequest(path, options = {}, admin = false) {
     const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
+
     if(admin) {
         if(!adminToken) throw new Error("Session Admin tidak tersedia. Silakan login kembali.");
         headers["Authorization"] = `Bearer ${adminToken}`;
+    } else if(userToken) {
+        headers["Authorization"] = `Bearer ${userToken}`;
     }
+
     const response = await fetch(`${REALTIME_SERVER_URL}${path}`, { ...options, headers });
     let data = {};
     try { data = await response.json(); } catch(_) {}
-    if(response.status === 401 && admin) {
-        adminToken = "";
-        adminTokenExpiresAt = "";
-        sessionStorage.removeItem("kgAdminToken");
-        sessionStorage.removeItem("kgAdminTokenExpiresAt");
+
+    if(response.status === 401) {
+        if(admin) {
+            adminToken = "";
+            adminTokenExpiresAt = "";
+            sessionStorage.removeItem("kgAdminToken");
+            sessionStorage.removeItem("kgAdminTokenExpiresAt");
+        } else if(userToken) {
+            userToken = "";
+            userTokenExpiresAt = "";
+            sessionStorage.removeItem("kgUserToken");
+            sessionStorage.removeItem("kgUserTokenExpiresAt");
+        }
         namaSaya = "";
         if(socket) { try { socket.disconnect(); } catch(_) {} }
         tampilHalaman("halamanMasuk");
-        throw new Error(data.message || "Session Admin berakhir. Silakan login kembali.");
+        throw new Error(data.message || `HTTP ${response.status}`);
     }
+
     if(!response.ok || data.ok === false) throw new Error(data.message || `HTTP ${response.status}`);
     return data;
 }
@@ -1222,8 +1235,12 @@ async function masukSistem() {
     }
     try {
         const data = await apiRequest('/api/auth/login', { method:'POST', body:JSON.stringify({nama,sandi}) });
-        userLoginPassword = sandi; // memory-only; tidak disimpan ke browser storage
-        namaSaya = data.user.nama;
+        userToken = data.token || data.userToken || "";
+        userTokenExpiresAt = data.expiresAt || "";
+        if(!userToken) throw new Error("Login berhasil tetapi User Token tidak diterima server.");
+        sessionStorage.setItem("kgUserToken", userToken);
+        if(userTokenExpiresAt) sessionStorage.setItem("kgUserTokenExpiresAt", userTokenExpiresAt);
+        namaSaya = data.user?.nama || nama;
         tampilHalaman("halamanDaftar");
         await muatGroupsPostgreSQL(true);
         muatDaftarGrup();
@@ -2787,42 +2804,7 @@ function updateHeartbeat() {
 }
 
 // ========== USER - DAFTAR GRUP ==========
-function hitungUserChannel(namaGrup, namaChannel) {
-    return Object.values(channelPresenceSessions || {}).filter(s =>
-        String(s?.group || s?.grup || '') === String(namaGrup) &&
-        String(s?.channel || s?.room || '') === String(namaChannel)
-    ).length;
-}
-
-function initChannelCountSocket() {
-    if(channelCountSocket?.connected) return;
-    if(!REALTIME_SERVER_URL || REALTIME_SERVER_URL.includes("YOUR-BACKEND")) return;
-
-    if(channelCountSocket) {
-        try { channelCountSocket.removeAllListeners(); } catch(_) {}
-        try { channelCountSocket.disconnect(); } catch(_) {}
-    }
-
-    channelCountSocket = io(REALTIME_SERVER_URL, {
-        transports:["websocket","polling"],
-        reconnection:true,
-        reconnectionAttempts:Infinity,
-        reconnectionDelay:800,
-        timeout:8000
-    });
-
-    channelCountSocket.on("presence:update", sessions => {
-        channelPresenceSessions = normalizeServerSessions(sessions);
-        try { muatDaftarGrup(); } catch(_) {}
-    });
-
-    channelCountSocket.on("disconnect", () => {
-        // Keep last known counts on screen until reconnect.
-    });
-}
-
 function muatDaftarGrup() {
-    initChannelCountSocket();
     const wadah = document.getElementById("daftarGrupTampil");
     const grup = ambilData("daftarGrup");
     if(grup.length === 0) {
@@ -2841,9 +2823,7 @@ function muatDaftarGrup() {
         let chHtml = g.channel.map(c => {
             const locked = c.locked ? ' 🔒' : '';
             const muted = c.muted ? ' 🔇' : '';
-            const userCount = hitungUserChannel(g.nama, c.nama);
-            const countBadge = ` <span title="User online di channel" style="display:inline-flex;align-items:center;gap:2px;font-size:11px;font-weight:700;padding:2px 7px;border-radius:999px;background:rgba(59,130,246,.14);">👥 ${userCount}</span>`;
-            const maxBadge = c.maxUsers && c.maxUsers > 0 ? ` <span title="Kapasitas maksimum" style="font-size:10px;color:#f472b6;">/ ${c.maxUsers}</span>` : '';
+            const maxBadge = c.maxUsers && c.maxUsers > 0 ? ` <span style="font-size:10px;color:#f472b6;">👥${c.maxUsers}</span>` : '';
             const cls = c.locked ? 'channel-locked' : (c.muted ? 'channel-muted' : '');
 
             // Determine if user can enter this channel
@@ -2867,7 +2847,7 @@ function muatDaftarGrup() {
             const disabledStyle = bolehMasuk ? '' : 'opacity:0.4;pointer-events:none;';
             const icon = bolehMasuk ? '🔊' : '🔐';
 
-            return `<div class="channel ${cls}" style="${disabledStyle}" onclick="${bolehMasuk ? `masukChannel('${g.nama}','${c.nama}')` : ''}">${icon} ${c.nama}${countBadge}${maxBadge}${locked}${muted}</div>`;
+            return `<div class="channel ${cls}" style="${disabledStyle}" onclick="${bolehMasuk ? `masukChannel('${g.nama}','${c.nama}')` : ''}">${icon} ${c.nama}${maxBadge}${locked}${muted}</div>`;
         }).join('');
 
         return `<div class="grup"><strong>📂 ${g.nama}</strong>${chHtml}</div>`;
@@ -2889,12 +2869,11 @@ async function masukChannel(namaGrup, namaChannel) {
         userData = { nama: ADMIN_NAMA, role: "admin", status: "aktif", banned: false, muted: false };
     } else {
         try {
-            if(!userLoginPassword) throw new Error("Session user tidak tersedia. Silakan login kembali.");
+            if(!userToken) throw new Error("Session user tidak tersedia. Silakan login kembali.");
             const dataUser = await apiRequest('/api/auth/me', {
-                method:'POST',
-                body:JSON.stringify({nama:namaSaya,sandi:userLoginPassword})
+                method:'GET'
             });
-            userData = dataUser.user || null;
+            userData = dataUser.user || dataUser.profile || null;
         } catch(err) {
             console.error('[CHANNEL] Gagal memverifikasi user PostgreSQL:', err);
             return toast(`❌ Gagal memverifikasi user: ${err.message}`, "merah");
@@ -4021,7 +4000,7 @@ setInterval(() => {
 
 // ========== DEBUG GLOBAL v2 ==========
 const DEBUG_UI_VERSION = "DEBUG-GLOBAL-v6-AUDIO-UNLOCK";
-const FRONTEND_BUILD = "2.8.0-J1-CHANNEL-USER-COUNT";
+const FRONTEND_BUILD = "2.7.2-H3.1-DUAL-AUTH";
 
 function ensureGlobalDebugUI() {
     if (!document.body) return;
