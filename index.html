@@ -925,6 +925,8 @@ let monitoringInterval = null;
 const REALTIME_SERVER_URL = window.REALTIME_SERVER_URL || "https://komunikasi-group-v2-production.up.railway.app";
 let socket = null;
 let serverSessions = {};
+let channelUserCounts = {};
+let channelCountRefreshInterval = null;
 let serverAdminStats = null;
 let serverActivityLogs = [];
 let peerIdSaya = null;
@@ -934,6 +936,53 @@ let turnIceServers = [];
 let turnConfigStatus = "NOT LOADED";
 let turnConfigError = "";
 let turnLoadedAt = null;
+
+async function refreshChannelUserCounts() {
+    try {
+        const response = await fetch(`${REALTIME_SERVER_URL}/api/presence`, {
+            method: "GET",
+            headers: { "Accept": "application/json" },
+            cache: "no-store"
+        });
+        const data = await response.json().catch(() => null);
+        if (!response.ok || !data?.ok) throw new Error(data?.message || `HTTP ${response.status}`);
+
+        const counts = {};
+        Object.values(data.sessions || {}).forEach(session => {
+            const group = String(session?.group || "").trim();
+            const channel = String(session?.channel || "").trim();
+            if (!group || !channel) return;
+            const key = `${group}::${channel}`;
+            counts[key] = (counts[key] || 0) + 1;
+        });
+        channelUserCounts = counts;
+
+        document.querySelectorAll(".channel-online-count").forEach(el => {
+            const key = decodeURIComponent(el.dataset.channelKey || "");
+            const count = channelUserCounts[key] || 0;
+            el.textContent = `👤${count}`;
+            el.title = `${count} user sedang online di channel ini`;
+        });
+    } catch (err) {
+        console.warn("[CHANNEL COUNT] Gagal memuat jumlah user channel:", err?.message || err);
+    }
+}
+
+function startChannelCountRefresh() {
+    if (channelCountRefreshInterval) clearInterval(channelCountRefreshInterval);
+    refreshChannelUserCounts();
+    channelCountRefreshInterval = setInterval(() => {
+        const page = document.getElementById("halamanDaftar");
+        if (page?.classList.contains("aktif")) refreshChannelUserCounts();
+    }, 5000);
+}
+
+function stopChannelCountRefresh() {
+    if (channelCountRefreshInterval) {
+        clearInterval(channelCountRefreshInterval);
+        channelCountRefreshInterval = null;
+    }
+}
 
 async function loadCloudflareTurnConfig() {
     turnConfigStatus = "LOADING";
@@ -1146,6 +1195,7 @@ async function keluarSistem() {
     userTokenExpiresAt = "";
     sessionStorage.removeItem("kgUserToken");
     sessionStorage.removeItem("kgUserTokenExpiresAt");
+    stopChannelCountRefresh();
     if(monitoringInterval) clearInterval(monitoringInterval);
     if(socket) { try { socket.disconnect(); } catch(_) {} }
     tampilHalaman("halamanMasuk");
@@ -2349,6 +2399,21 @@ function initRealtimeSocket() {
     });
     socket.on("presence:update", sessions => {
         serverSessions = normalizeServerSessions(sessions);
+        const counts = {};
+        Object.values(serverSessions || {}).forEach(session => {
+            const group = String(session?.group || "").trim();
+            const channel = String(session?.channel || "").trim();
+            if (!group || !channel) return;
+            const key = `${group}::${channel}`;
+            counts[key] = (counts[key] || 0) + 1;
+        });
+        channelUserCounts = counts;
+        document.querySelectorAll(".channel-online-count").forEach(el => {
+            const key = decodeURIComponent(el.dataset.channelKey || "");
+            const count = channelUserCounts[key] || 0;
+            el.textContent = `👤${count}`;
+            el.title = `${count} user sedang online di channel ini`;
+        });
 
         // G3.1: presence Socket.IO adalah sumber ONLINE realtime.
         // Jangan biarkan summary hasil fetch sebelumnya menahan angka Online lama.
@@ -2813,6 +2878,7 @@ function muatDaftarGrup() {
     }
 
     const isAdmin = namaSaya === ADMIN_NAMA;
+    startChannelCountRefresh();
 
     wadah.innerHTML = grup.map(g => {
         if(g.status !== "aktif") return '';
@@ -2824,6 +2890,9 @@ function muatDaftarGrup() {
             const locked = c.locked ? ' 🔒' : '';
             const muted = c.muted ? ' 🔇' : '';
             const maxBadge = c.maxUsers && c.maxUsers > 0 ? ` <span style="font-size:10px;color:#f472b6;">👥${c.maxUsers}</span>` : '';
+            const channelKey = `${g.nama}::${c.nama}`;
+            const onlineCount = channelUserCounts[channelKey] || 0;
+            const onlineBadge = ` <span class="channel-online-count" data-channel-key="${encodeURIComponent(channelKey)}" title="${onlineCount} user sedang online di channel ini" style="font-size:10px;color:#22c55e;font-weight:700;">👤${onlineCount}</span>`;
             const cls = c.locked ? 'channel-locked' : (c.muted ? 'channel-muted' : '');
 
             // Determine if user can enter this channel
@@ -2847,7 +2916,7 @@ function muatDaftarGrup() {
             const disabledStyle = bolehMasuk ? '' : 'opacity:0.4;pointer-events:none;';
             const icon = bolehMasuk ? '🔊' : '🔐';
 
-            return `<div class="channel ${cls}" style="${disabledStyle}" onclick="${bolehMasuk ? `masukChannel('${g.nama}','${c.nama}')` : ''}">${icon} ${c.nama}${maxBadge}${locked}${muted}</div>`;
+            return `<div class="channel ${cls}" style="${disabledStyle}" onclick="${bolehMasuk ? `masukChannel('${g.nama}','${c.nama}')` : ''}">${icon} ${c.nama}${onlineBadge}${maxBadge}${locked}${muted}</div>`;
         }).join('');
 
         return `<div class="grup"><strong>📂 ${g.nama}</strong>${chHtml}</div>`;
