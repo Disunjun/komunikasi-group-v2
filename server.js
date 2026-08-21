@@ -13,6 +13,12 @@
 // - voice_messages
 // from 001_recording_v1.sql
 //
+// Authentication contract:
+// - Admin API and admin sockets require an Admin Bearer token from POST /api/admin/login.
+// - User API and user sockets require a User Bearer token from POST /api/auth/login.
+// - Recording access requires channel membership recorded in user_group_channel,
+//   which is granted when the user joins the realtime room.
+//
 // Required Railway Variables for recording:
 // - SUPABASE_URL
 // - SUPABASE_SERVICE_ROLE_KEY
@@ -56,7 +62,7 @@ import { createClient } from '@supabase/supabase-js';
 const { Pool } = pg;
 const scryptAsync = promisify(crypto.scrypt);
 
-const SERVER_VERSION = '2.4.1-E-A1.5 + Recording V1/P1';
+const SERVER_VERSION = '2.5.0-A2 + Recording V1/P1';
 
 const SUPABASE_URL = String(process.env.SUPABASE_URL || '').trim();
 const SUPABASE_SERVICE_ROLE_KEY = String(process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
@@ -81,11 +87,18 @@ const supabaseAdmin =
       })
     : null;
 const app = express();
+app.set('trust proxy', Number(process.env.TRUST_PROXY_HOPS || 1));
 const server = http.createServer(app);
 const PORT = Number(process.env.PORT || 3000);
 const FRONTEND_ORIGINS = (process.env.FRONTEND_ORIGINS || '*').split(',').map(s => s.trim()).filter(Boolean);
-const ADMIN_NAME = process.env.ADMIN_NAME || 'Didik Suntoro';
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'D1d1kSunt0r0@#$';
+const ADMIN_NAME = String(process.env.ADMIN_NAME || '').trim();
+
+if (!ADMIN_NAME) {
+  console.warn('[SECURITY] ADMIN_NAME belum diset. Login admin memakai akun manapun dengan role=admin di database.');
+}
+if (FRONTEND_ORIGINS.includes('*')) {
+  console.warn('[SECURITY] FRONTEND_ORIGINS belum diset. CORS terbuka untuk semua origin.');
+}
 
 const corsOrigin = FRONTEND_ORIGINS.includes('*') ? true : FRONTEND_ORIGINS;
 const io = new Server(server, { cors: { origin: corsOrigin, methods: ['GET','HEAD','POST','PUT','PATCH','DELETE','OPTIONS'] }, transports: ['websocket','polling'] });
@@ -116,10 +129,47 @@ app.options(/.*/, cors({
   optionsSuccessStatus: 204
 }));
 app.use(express.json({ limit: '64kb' }));
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('Cross-Origin-Resource-Policy', 'same-site');
+  next();
+});
+
+// ===== LOGIN RATE LIMIT =====
+const LOGIN_MAX_ATTEMPTS = Math.max(1, Number(process.env.LOGIN_MAX_ATTEMPTS || 8));
+const LOGIN_WINDOW_MS = Math.max(1000, Number(process.env.LOGIN_WINDOW_MS || 10 * 60 * 1000));
+const loginAttempts = new Map();
+const KICK_DURATION_MS = Math.max(1000, Number(process.env.ADMIN_KICK_DURATION_MS || 5 * 60 * 1000));
+const STALE_SESSION_MS = Math.max(15000, Number(process.env.STALE_SESSION_MS || 65000));
+function loginRateKey(req, scope) { return `${scope}:${req.ip || 'unknown'}`; }
+function checkLoginRate(key) {
+  const entry = loginAttempts.get(key);
+  if (!entry) return { ok: true, retryAfterSec: 0 };
+  if (entry.resetAt <= Date.now()) { loginAttempts.delete(key); return { ok: true, retryAfterSec: 0 }; }
+  if (entry.count < LOGIN_MAX_ATTEMPTS) return { ok: true, retryAfterSec: 0 };
+  return { ok: false, retryAfterSec: Math.ceil((entry.resetAt - Date.now()) / 1000) };
+}
+function recordLoginFailure(key) {
+  const now = Date.now();
+  const entry = loginAttempts.get(key);
+  if (!entry || entry.resetAt <= now) loginAttempts.set(key, { count: 1, resetAt: now + LOGIN_WINDOW_MS });
+  else entry.count += 1;
+}
+function clearLoginFailures(key) { loginAttempts.delete(key); }
+function rejectLoginRate(res, rate) {
+  return res.status(429).json({
+    ok: false,
+    message: `Terlalu banyak percobaan login. Coba lagi dalam ${rate.retryAfterSec} detik.`
+  });
+}
 
 let db = null;
 if (process.env.DATABASE_URL) {
-  db = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
+  const rejectUnauthorized = String(process.env.DATABASE_SSL_REJECT_UNAUTHORIZED || 'false').toLowerCase() === 'true';
+  const sslDisabled = /[?&]sslmode=disable\b/i.test(process.env.DATABASE_URL);
+  db = new Pool({ connectionString: process.env.DATABASE_URL, ssl: sslDisabled ? false : { rejectUnauthorized } });
   console.log('[DB] DATABASE_URL ditemukan.');
 } else console.warn('[DB] DATABASE_URL tidak ditemukan. Database dinonaktifkan.');
 
@@ -129,12 +179,7 @@ async function hashPassword(password) {
   return `scrypt$${salt}$${Buffer.from(derived).toString('hex')}`;
 }
 async function verifyPassword(password, stored) {
-  if (!stored) return false;
-  if (!stored.startsWith('scrypt$')) {
-    const a = Buffer.from(String(password));
-    const b = Buffer.from(String(stored));
-    return a.length === b.length && crypto.timingSafeEqual(a, b);
-  }
+  if (!stored || !String(stored).startsWith('scrypt$')) return false;
   const [, salt, hex] = stored.split('$');
   const derived = Buffer.from(await scryptAsync(password, salt, 64));
   const expected = Buffer.from(hex, 'hex');
@@ -180,23 +225,30 @@ async function requireAdminToken(req,res,next) {
     req.adminSession=admin; req.adminToken=token; next();
   } catch(e) { console.error('[ADMIN AUTH] TOKEN ERROR:',e.message); res.status(500).json({ok:false,message:'Gagal memvalidasi Admin Token.'}); }
 }
-async function requireAdminAny(req,res,next) {
-  if (adminBearerToken(req)) return requireAdminToken(req,res,next);
-  if (isAdminRequest(req)) { req.adminSession={admin_name:ADMIN_NAME,legacy:true}; return next(); }
-  return res.status(401).json({ok:false,message:'Admin tidak terautentikasi'});
+function adminSessionName(adminSession) {
+  return adminSession?.username || adminSession?.admin_name || ADMIN_NAME || 'admin';
 }
 async function auditAdmin(adminSession, action, target='', detail='') {
   if(!db) return;
-  const name=adminSession?.admin_name || ADMIN_NAME;
-  await db.query(`INSERT INTO audit_logs(admin_name,action,target,detail) VALUES($1,$2,$3,$4)`,[name,action,target,detail]);
+  const name=adminSessionName(adminSession);
+  try {
+    const r=await db.query(`INSERT INTO audit_logs(admin_name,action,target,detail) VALUES($1,$2,$3,$4) RETURNING id,admin_name,action,target,detail,created_at`,[name,action,target,detail]);
+    const row=r.rows[0];
+    if(row) io.emit('audit:new',{id:row.id,adminName:row.admin_name,action:row.action,target:row.target,detail:row.detail,createdAt:row.created_at});
+  } catch(e) {
+    console.error('[AUDIT] WRITE ERROR:',e.message);
+  }
+}
+async function writeActivity(username, group, channel, action) {
+  if(!db) return;
+  try { await db.query(`INSERT INTO activity_logs(username,group_name,channel_name,action) VALUES($1,$2,$3,$4)`,[username,group,channel,action]); }
+  catch(e) { console.error('[ACTIVITY] WRITE ERROR:',e.message); }
 }
 
 function publicUser(row) {
   return { id: row.id, nama: row.username, role: row.role || 'user', status: row.active ? 'aktif' : 'nonaktif', banned: !!row.banned, muted: !!row.muted, dibuatOleh: row.created_by || 'system', tanggalDibuat: row.created_at ? new Date(row.created_at).toLocaleDateString('id-ID') : '-' };
 }
 function requireDb(res) { if (db) return true; res.status(503).json({ok:false,message:'Database belum tersedia'}); return false; }
-function isAdminRequest(req) { return req.get('x-admin-name') === ADMIN_NAME && req.get('x-admin-password') === ADMIN_PASSWORD; }
-function requireAdmin(req,res,next) { if (!isAdminRequest(req)) return res.status(401).json({ok:false,message:'Admin tidak terautentikasi'}); next(); }
 
 async function testDatabase() {
   if (!db) return;
@@ -221,7 +273,7 @@ app.post('/api/auth/register', async (req,res) => {
   try {
     const nama=String(req.body?.nama||'').trim(), sandi=String(req.body?.sandi||'');
     if(nama.length<2 || sandi.length<4) return res.status(400).json({ok:false,message:'Nama minimal 2 karakter dan password minimal 4 karakter.'});
-    if(nama.toLowerCase()===ADMIN_NAME.toLowerCase()) return res.status(400).json({ok:false,message:'Nama ini tidak boleh digunakan.'});
+    if(ADMIN_NAME && nama.toLowerCase()===ADMIN_NAME.toLowerCase()) return res.status(400).json({ok:false,message:'Nama ini tidak boleh digunakan.'});
     const h=await hashPassword(sandi);
     const r=await db.query(`INSERT INTO users(username,password_hash,role,active,banned,muted,created_by) VALUES($1,$2,'user',TRUE,FALSE,FALSE,$1) RETURNING *`,[nama,h]);
     console.log('[USER] REGISTER:', nama); res.json({ok:true,user:publicUser(r.rows[0])});
@@ -229,11 +281,15 @@ app.post('/api/auth/register', async (req,res) => {
 });
 app.post('/api/auth/login', async (req,res) => {
   if (!requireDb(res)) return;
+  const rateKey=loginRateKey(req,'user');
+  const rate=checkLoginRate(rateKey);
+  if(!rate.ok) return rejectLoginRate(res,rate);
   try {
     const nama=String(req.body?.nama||'').trim(), sandi=String(req.body?.sandi||'');
     const r=await db.query(`SELECT * FROM users WHERE lower(username)=lower($1) LIMIT 1`,[nama]);
     const u=r.rows[0];
-    if(!u || !(await verifyPassword(sandi,u.password_hash))) return res.status(401).json({ok:false,message:'Nama atau Kata Sandi salah!'});
+    if(!u || !(await verifyPassword(sandi,u.password_hash))) { recordLoginFailure(rateKey); return res.status(401).json({ok:false,message:'Nama atau Kata Sandi salah!'}); }
+    clearLoginFailures(rateKey);
     if(u.banned) return res.status(403).json({ok:false,message:'Akun Anda telah di-banned! Hubungi admin.'});
     if(!u.active) return res.status(403).json({ok:false,message:'Akun Anda dinonaktifkan! Hubungi admin.'});
     const token=createUserToken(), expiresAt=userTokenExpiry();
@@ -249,13 +305,22 @@ app.post('/api/auth/logout', requireUser, async (req,res) => {
 });
 app.post('/api/admin/login', async (req,res) => {
   if(!requireDb(res)) return;
+  const rateKey=loginRateKey(req,'admin');
+  const rate=checkLoginRate(rateKey);
+  if(!rate.ok) return rejectLoginRate(res,rate);
   try {
     const nama=String(req.body?.nama||'').trim(), sandi=String(req.body?.sandi||'');
-    if(nama!==ADMIN_NAME || !(await verifyPassword(sandi,(await db.query(`SELECT password_hash FROM users WHERE lower(username)=lower($1) AND role='admin' LIMIT 1`,[nama])).rows[0]?.password_hash))) {
+    if(ADMIN_NAME && nama.toLowerCase()!==ADMIN_NAME.toLowerCase()) {
+      recordLoginFailure(rateKey);
       return res.status(401).json({ok:false,message:'Nama atau Kata Sandi Admin salah.'});
     }
-    const u=(await db.query(`SELECT id,username,role,active,banned FROM users WHERE lower(username)=lower($1) AND role='admin' LIMIT 1`,[nama])).rows[0];
-    if(!u || !u.active || u.banned) return res.status(403).json({ok:false,message:'Akun Admin tidak diizinkan.'});
+    const u=(await db.query(`SELECT id,username,role,active,banned,password_hash FROM users WHERE lower(username)=lower($1) AND role='admin' LIMIT 1`,[nama])).rows[0];
+    if(!u || !(await verifyPassword(sandi,u.password_hash))) {
+      recordLoginFailure(rateKey);
+      return res.status(401).json({ok:false,message:'Nama atau Kata Sandi Admin salah.'});
+    }
+    clearLoginFailures(rateKey);
+    if(!u.active || u.banned) return res.status(403).json({ok:false,message:'Akun Admin tidak diizinkan.'});
     const token=createAdminToken(), expiresAt=adminTokenExpiry();
     await db.query(`INSERT INTO admin_sessions(admin_user_id,token_hash,expires_at) VALUES($1,$2,$3)`,[u.id,hashAdminToken(token),expiresAt]);
     await auditAdmin({admin_name:u.username},'ADMIN_LOGIN',u.username,'Admin token issued');
@@ -267,15 +332,15 @@ app.get('/api/admin/me', requireAdminToken, async (req,res) => {
 });
 app.post('/api/admin/logout', requireAdminToken, async (req,res) => {
   await db.query(`UPDATE admin_sessions SET revoked_at=NOW() WHERE token_hash=$1 AND revoked_at IS NULL`,[hashAdminToken(req.adminToken)]);
-  await auditAdmin(req.adminSession,'ADMIN_LOGOUT',req.adminSession.username,'Admin token revoked');
+  await auditAdmin(req.adminSession,'ADMIN_LOGOUT',adminSessionName(req.adminSession),'Admin token revoked');
   res.json({ok:true});
 });
 
-app.get('/api/users', requireAdminAny, async (req,res)=>{ if(!requireDb(res)) return; try { const r=await db.query(`SELECT * FROM users ORDER BY id ASC`); res.json({ok:true,users:r.rows.map(publicUser)}); } catch(e){res.status(500).json({ok:false,message:e.message});} });
-app.post('/api/users', requireAdminAny, async (req,res)=>{ if(!requireDb(res)) return; try { const nama=String(req.body?.nama||'').trim(),sandi=String(req.body?.sandi||''); if(nama.length<2||sandi.length<4)return res.status(400).json({ok:false,message:'Nama/password tidak valid.'}); const h=await hashPassword(sandi); const r=await db.query(`INSERT INTO users(username,password_hash,role,active,banned,muted,created_by) VALUES($1,$2,'user',TRUE,FALSE,FALSE,$3) RETURNING *`,[nama,h,ADMIN_NAME]); console.log('[USER] ADMIN CREATE:',nama); await auditAdmin(req.adminSession,'USER_CREATE',nama,'User created by admin'); res.json({ok:true,user:publicUser(r.rows[0])}); } catch(e){ if(e.code==='23505')return res.status(409).json({ok:false,message:'Nama sudah terdaftar.'}); res.status(500).json({ok:false,message:e.message}); } });
-app.patch('/api/users/:id', requireAdminAny, async (req,res)=>{ if(!requireDb(res)) return; try { const active=req.body?.status==='aktif', banned=!!req.body?.banned, muted=!!req.body?.muted; const r=await db.query(`UPDATE users SET active=$1,banned=$2,muted=$3,updated_at=NOW() WHERE id=$4 AND role<>'admin' RETURNING *`,[active,banned,muted,req.params.id]); if(!r.rows[0])return res.status(404).json({ok:false,message:'User tidak ditemukan/tidak dapat diubah.'}); console.log('[USER] UPDATE:',r.rows[0].username); await auditAdmin(req.adminSession,'USER_UPDATE',r.rows[0].username,JSON.stringify({status:req.body?.status,banned:req.body?.banned,muted:req.body?.muted})); res.json({ok:true,user:publicUser(r.rows[0])}); } catch(e){res.status(500).json({ok:false,message:e.message});} });
-app.patch('/api/users/:id/password', requireAdminAny, async (req,res)=>{ if(!requireDb(res)) return; try { const sandi=String(req.body?.sandi||''); if(sandi.length<4)return res.status(400).json({ok:false,message:'Password minimal 4 karakter.'}); const h=await hashPassword(sandi); const r=await db.query(`UPDATE users SET password_hash=$1,updated_at=NOW() WHERE id=$2 AND role<>'admin' RETURNING username`,[h,req.params.id]); if(!r.rows[0])return res.status(404).json({ok:false,message:'User tidak ditemukan.'}); console.log('[USER] RESET PASSWORD:',r.rows[0].username); res.json({ok:true}); } catch(e){res.status(500).json({ok:false,message:e.message});} });
-app.delete('/api/users/:id', requireAdminAny, async (req,res)=>{ if(!requireDb(res)) return; try { const r=await db.query(`DELETE FROM users WHERE id=$1 AND role<>'admin' RETURNING username`,[req.params.id]); if(!r.rows[0])return res.status(404).json({ok:false,message:'User tidak ditemukan.'}); console.log('[USER] DELETE:',r.rows[0].username); await auditAdmin(req.adminSession,'USER_DELETE',r.rows[0].username,'User deleted'); res.json({ok:true}); } catch(e){res.status(500).json({ok:false,message:e.message});} });
+app.get('/api/users', requireAdminToken, async (req,res)=>{ if(!requireDb(res)) return; try { const r=await db.query(`SELECT * FROM users ORDER BY id ASC`); res.json({ok:true,users:r.rows.map(publicUser)}); } catch(e){res.status(500).json({ok:false,message:e.message});} });
+app.post('/api/users', requireAdminToken, async (req,res)=>{ if(!requireDb(res)) return; try { const nama=String(req.body?.nama||'').trim(),sandi=String(req.body?.sandi||''); if(nama.length<2||sandi.length<4)return res.status(400).json({ok:false,message:'Nama/password tidak valid.'}); const h=await hashPassword(sandi); const r=await db.query(`INSERT INTO users(username,password_hash,role,active,banned,muted,created_by) VALUES($1,$2,'user',TRUE,FALSE,FALSE,$3) RETURNING *`,[nama,h,adminSessionName(req.adminSession)]); console.log('[USER] ADMIN CREATE:',nama); await auditAdmin(req.adminSession,'USER_CREATE',nama,'User created by admin'); res.json({ok:true,user:publicUser(r.rows[0])}); } catch(e){ if(e.code==='23505')return res.status(409).json({ok:false,message:'Nama sudah terdaftar.'}); res.status(500).json({ok:false,message:e.message}); } });
+app.patch('/api/users/:id', requireAdminToken, async (req,res)=>{ if(!requireDb(res)) return; try { const active=req.body?.status==='aktif', banned=!!req.body?.banned, muted=!!req.body?.muted; const r=await db.query(`UPDATE users SET active=$1,banned=$2,muted=$3,updated_at=NOW() WHERE id=$4 AND role<>'admin' RETURNING *`,[active,banned,muted,req.params.id]); if(!r.rows[0])return res.status(404).json({ok:false,message:'User tidak ditemukan/tidak dapat diubah.'}); console.log('[USER] UPDATE:',r.rows[0].username); await auditAdmin(req.adminSession,'USER_UPDATE',r.rows[0].username,JSON.stringify({status:req.body?.status,banned:req.body?.banned,muted:req.body?.muted})); res.json({ok:true,user:publicUser(r.rows[0])}); } catch(e){res.status(500).json({ok:false,message:e.message});} });
+app.patch('/api/users/:id/password', requireAdminToken, async (req,res)=>{ if(!requireDb(res)) return; try { const sandi=String(req.body?.sandi||''); if(sandi.length<4)return res.status(400).json({ok:false,message:'Password minimal 4 karakter.'}); const h=await hashPassword(sandi); const r=await db.query(`UPDATE users SET password_hash=$1,updated_at=NOW() WHERE id=$2 AND role<>'admin' RETURNING username`,[h,req.params.id]); if(!r.rows[0])return res.status(404).json({ok:false,message:'User tidak ditemukan.'}); console.log('[USER] RESET PASSWORD:',r.rows[0].username); await auditAdmin(req.adminSession,'USER_PASSWORD_RESET',r.rows[0].username,'Password reset by admin'); res.json({ok:true}); } catch(e){res.status(500).json({ok:false,message:e.message});} });
+app.delete('/api/users/:id', requireAdminToken, async (req,res)=>{ if(!requireDb(res)) return; try { const r=await db.query(`DELETE FROM users WHERE id=$1 AND role<>'admin' RETURNING username`,[req.params.id]); if(!r.rows[0])return res.status(404).json({ok:false,message:'User tidak ditemukan.'}); console.log('[USER] DELETE:',r.rows[0].username); await auditAdmin(req.adminSession,'USER_DELETE',r.rows[0].username,'User deleted'); res.json({ok:true}); } catch(e){res.status(500).json({ok:false,message:e.message});} });
 
 const sessions=new Map(), rooms=new Map(), kicked=new Map();
 function publicSessions(){ const out={}; for(const s of sessions.values()) out[s.nama]={nama:s.nama,group:s.group,channel:s.channel,micStatus:!!s.micStatus,floorStatus:s.floorStatus||'idle',peerId:s.peerId||null,timestamp:s.timestamp}; return out; }
@@ -298,11 +363,6 @@ app.get('/api/config/groups', async (req,res) => {
       ['groups']
     );
     const row = r.rows[0];
-    io.emit('config:groups:update', {
-  groups: r.rows[0].config_value,
-  updatedBy: r.rows[0].updated_by,
-  updatedAt: r.rows[0].updated_at
-});
     res.json({
       ok:true,
       groups:row?.config_value || [],
@@ -315,7 +375,7 @@ app.get('/api/config/groups', async (req,res) => {
   }
 });
 
-app.put('/api/config/groups', requireAdminAny, async (req,res) => {
+app.put('/api/config/groups', requireAdminToken, async (req,res) => {
   if(!requireDb(res)) return;
   try {
     if(!Array.isArray(req.body?.groups)) {
@@ -345,10 +405,15 @@ app.put('/api/config/groups', requireAdminAny, async (req,res) => {
          updated_by=EXCLUDED.updated_by,
          updated_at=NOW()
        RETURNING config_value,updated_by,updated_at`,
-      ['groups', JSON.stringify(groups), req.adminSession?.admin_name || ADMIN_NAME]
+      ['groups', JSON.stringify(groups), adminSessionName(req.adminSession)]
     );
 
     console.log('[CONFIG] GROUPS SAVED:', groups.length);
+    io.emit('config:groups:update', {
+      groups: r.rows[0].config_value,
+      updatedBy: r.rows[0].updated_by,
+      updatedAt: r.rows[0].updated_at
+    });
     res.json({
       ok:true,
       groups:r.rows[0].config_value,
@@ -362,6 +427,91 @@ app.put('/api/config/groups', requireAdminAny, async (req,res) => {
 });
 
 app.get('/api/presence',(req,res)=>res.json({ok:true,sessions:publicSessions()}));
+app.get('/api/config/app',(req,res)=>res.json({ok:true,adminName:ADMIN_NAME,version:SERVER_VERSION}));
+
+// ===== ADMIN STATISTICS & AUDIT =====
+const ADMIN_ACTIVITY_MONTHS = Math.max(1, Number(process.env.ADMIN_ACTIVITY_MONTHS || 12));
+
+app.get('/api/admin/stats', requireAdminToken, async (req,res) => {
+  if(!requireDb(res)) return;
+  try {
+    const totals = await db.query(`SELECT COUNT(*)::int AS total_users FROM users`);
+    const config = await db.query(`SELECT config_value FROM app_config WHERE config_key=$1 LIMIT 1`,['groups']);
+    const groups = Array.isArray(config.rows[0]?.config_value) ? config.rows[0].config_value : [];
+    const totalChannels = groups.reduce((sum,g)=>sum+(Array.isArray(g?.channel)?g.channel.length:0),0);
+
+    const activity = await db.query(
+      `SELECT id,username,group_name,channel_name,action,created_at
+         FROM activity_logs
+        WHERE created_at > NOW() - make_interval(months => $1::int)
+        ORDER BY created_at DESC
+        LIMIT 5000`,
+      [ADMIN_ACTIVITY_MONTHS]
+    );
+
+    res.json({
+      ok:true,
+      summary:{
+        totalUsers: totals.rows[0]?.total_users || 0,
+        onlineUsers: sessions.size,
+        totalGroups: groups.length,
+        totalChannels
+      },
+      sessions: Object.values(publicSessions()),
+      activity: activity.rows.map(a=>({
+        id:a.id,
+        nama:a.username,
+        group:a.group_name,
+        channel:a.channel_name,
+        aksi:a.action,
+        createdAt:a.created_at
+      }))
+    });
+  } catch(e) {
+    console.error('[ADMIN] STATS ERROR:',e.message);
+    res.status(500).json({ok:false,message:'Gagal membaca statistik server.'});
+  }
+});
+
+app.get('/api/audit-logs', requireAdminToken, async (req,res) => {
+  if(!requireDb(res)) return;
+  try {
+    const limit = Math.min(1000, Math.max(1, Number(req.query?.limit || 500)));
+    const r = await db.query(
+      `SELECT id,admin_name,action,target,detail,created_at
+         FROM audit_logs
+        ORDER BY created_at DESC, id DESC
+        LIMIT $1`,
+      [limit]
+    );
+    res.json({
+      ok:true,
+      logs:r.rows.map(a=>({
+        id:a.id,
+        adminName:a.admin_name,
+        action:a.action,
+        target:a.target,
+        detail:a.detail,
+        createdAt:a.created_at
+      }))
+    });
+  } catch(e) {
+    console.error('[AUDIT] LIST ERROR:',e.message);
+    res.status(500).json({ok:false,message:'Gagal membaca audit log.'});
+  }
+});
+
+app.delete('/api/audit-logs', requireAdminToken, async (req,res) => {
+  if(!requireDb(res)) return;
+  try {
+    const r = await db.query(`DELETE FROM audit_logs`);
+    await auditAdmin(req.adminSession,'AUDIT_CLEAR','audit_logs',`${r.rowCount} baris dihapus`);
+    res.json({ok:true,deleted:r.rowCount});
+  } catch(e) {
+    console.error('[AUDIT] CLEAR ERROR:',e.message);
+    res.status(500).json({ok:false,message:'Gagal membersihkan audit log.'});
+  }
+});
 
 // ===== CLOUDFLARE REALTIME TURN =====
 // TURN Key ID dan API Token tetap hanya di Railway Variables.
@@ -520,10 +670,39 @@ function recordingPublic(row, signedUrl = null) {
   };
 }
 
-async function getRecordingUser(req) {
-  const token = bearerToken(req);
-  if (!token) return null;
-  return getUserFromToken(token);
+// Channel membership is granted when a user joins the realtime room and is the
+// authorization basis for every recording operation.
+async function isChannelMember(userId, group, channel) {
+  if (!db) return false;
+  const r = await db.query(
+    `SELECT 1
+       FROM user_group_channel
+      WHERE user_id=$1 AND group_name=$2 AND channel_name=$3
+      LIMIT 1`,
+    [userId, group, channel]
+  );
+  return !!r.rows[0];
+}
+
+async function grantChannelMembership(userId, group, channel, grantedBy = null) {
+  if (!db || !userId) return;
+  try {
+    await db.query(
+      `INSERT INTO user_group_channel(user_id,group_name,channel_name,created_by)
+       VALUES($1,$2,$3,$4)
+       ON CONFLICT (user_id,group_name,channel_name) DO NOTHING`,
+      [userId, group, channel, grantedBy]
+    );
+  } catch (e) {
+    console.error('[RECORDING] MEMBERSHIP GRANT ERROR:', e.message);
+  }
+}
+
+function rejectChannelAccess(res) {
+  return res.status(403).json({
+    ok: false,
+    message: 'Anda tidak memiliki akses ke group/channel ini.'
+  });
 }
 
 // Return recording list for the authenticated user's current group/channel.
@@ -540,6 +719,10 @@ app.get('/api/recordings', requireUser, async (req, res) => {
         ok: false,
         message: 'Group dan channel wajib diisi.'
       });
+    }
+
+    if (!(await isChannelMember(req.user.id, group, channel))) {
+      return rejectChannelAccess(res);
     }
 
     const r = await db.query(
@@ -647,6 +830,10 @@ app.post(
           ok: false,
           message: `MIME type recording tidak didukung: ${mimeType}`
         });
+      }
+
+      if (!(await isChannelMember(req.user.id, group, channel))) {
+        return rejectChannelAccess(res);
       }
 
       // Idempotency: if the same client upload was already registered,
@@ -821,6 +1008,11 @@ app.get('/api/recordings/:id/url', requireUser, async (req, res) => {
       });
     }
 
+    if (row.sender_id !== req.user.id &&
+        !(await isChannelMember(req.user.id, row.group_name, row.channel_name))) {
+      return rejectChannelAccess(res);
+    }
+
     const signed = await supabaseAdmin.storage
       .from(RECORDING_BUCKET)
       .createSignedUrl(row.storage_path, 300);
@@ -979,7 +1171,7 @@ io.use(async (socket,next)=>{
       socket.data.admin=admin;
     }
     next();
-  } catch(e) { next(new Error('Gagal memvalidasi Admin Token.')); }
+  } catch(e) { console.error('[SOCKET ADMIN AUTH ERROR]',e.message); next(new Error('Gagal memvalidasi Admin Token.')); }
 });
 
 io.use(async (socket,next)=>{
@@ -988,9 +1180,10 @@ io.use(async (socket,next)=>{
     socket.data.userToken=token;
     socket.data.user=null;
 
-    // Backward compatibility: legacy Web clients may connect without a token.
+    // Admin monitoring sockets authenticate with an admin token only.
     if(!token){
-      return next();
+      if(socket.data.admin) return next();
+      return next(new Error('User Token diperlukan. Silakan login kembali.'));
     }
     if(!db){
       return next(new Error('Database belum tersedia untuk autentikasi.'));
@@ -1010,46 +1203,63 @@ io.use(async (socket,next)=>{
 });
 
 io.on('connection',socket=>{
-  const socketToken=socket.data.userToken||'';
   const socketUser=socket.data.user||null;
+  const socketAdmin=socket.data.admin||null;
+  // Room identity always comes from an authenticated token (user or admin).
+  const socketActor=socketUser
+    ? {id:socketUser.id,nama:socketUser.username}
+    : (socketAdmin?{id:socketAdmin.admin_user_id,nama:socketAdmin.username}:null);
   if(socketUser){
     socket.emit('auth:ready',{ok:true,user:publicUser(socketUser)});
   }
   console.log('[SOCKET] Connected:',socket.id); socket.emit('server:ready',{version:SERVER_VERSION,transport:socket.conn.transport.name});
   socket.on('room:join',async payload=>{try{
-    const namaPayload=String(payload?.nama||'').trim(),group=String(payload?.group||'').trim(),channel=String(payload?.channel||'').trim(),peerId=String(payload?.peerId||'').trim(),maxUsers=Number(payload?.maxUsers||0);
-    if(!namaPayload||!group||!channel||!peerId)return socket.emit('room:error',{message:'Data room tidak lengkap.'});
-    if(socketToken&&!socketUser)return socket.emit('room:error',{message:'Autentikasi user gagal. Silakan login kembali.'});
-    const nama=socketUser?socketUser.username:namaPayload;
+    const group=String(payload?.group||'').trim(),channel=String(payload?.channel||'').trim(),peerId=String(payload?.peerId||'').trim(),maxUsers=Number(payload?.maxUsers||0);
+    if(!group||!channel||!peerId)return socket.emit('room:error',{message:'Data room tidak lengkap.'});
+    if(!socketActor)return socket.emit('room:error',{message:'Autentikasi user gagal. Silakan login kembali.'});
+    const nama=socketActor.nama;
     if(db){const ur=await db.query(`SELECT active,banned FROM users WHERE lower(username)=lower($1) LIMIT 1`,[nama]); if(!ur.rows[0])return socket.emit('room:error',{message:'User tidak terdaftar di database.'}); if(ur.rows[0].banned||!ur.rows[0].active)return socket.emit('room:error',{message:'Akun tidak diizinkan masuk.'});}
     const blockedUntil=kicked.get(nama);if(blockedUntil&&blockedUntil>Date.now())return socket.emit('room:error',{message:'Anda sedang di-kick oleh admin.'});
     const room=`${group}::${channel}`; const existing=[...(rooms.get(room)||new Set())].map(id=>sessions.get(id)).filter(Boolean).filter(s=>s.nama!==nama); if(maxUsers>0&&existing.length>=maxUsers)return socket.emit('room:error',{message:`Channel penuh! Maksimal ${maxUsers} user.`});
-    const old=sessions.get(socket.id);if(old?.room){rooms.get(old.room)?.delete(socket.id);socket.leave(old.room);} const session={socketId:socket.id,nama,group,channel,room,peerId,micStatus:false,floorStatus:'idle',timestamp:Date.now()}; sessions.set(socket.id,session);if(!rooms.has(room))rooms.set(room,new Set());rooms.get(room).add(socket.id);socket.join(room);await savePresence(session);socket.emit('room:joined',{room,users:roomUsers(room),self:session});io.to(room).emit('room:users',roomUsers(room));emitPresence();console.log('[ROOM JOIN]',nama,'=>',room);
+    const old=sessions.get(socket.id);if(old?.room){rooms.get(old.room)?.delete(socket.id);socket.leave(old.room);} const session={socketId:socket.id,nama,group,channel,room,peerId,micStatus:false,floorStatus:'idle',timestamp:Date.now()}; sessions.set(socket.id,session);if(!rooms.has(room))rooms.set(room,new Set());rooms.get(room).add(socket.id);socket.join(room);await savePresence(session);await grantChannelMembership(socketActor.id,group,channel,socketActor.id);await writeActivity(nama,group,channel,'MASUK');socket.emit('room:joined',{room,users:roomUsers(room),self:session});io.to(room).emit('room:users',roomUsers(room));emitPresence();console.log('[ROOM JOIN]',nama,'=>',room);
   }catch(e){console.error('[ROOM JOIN ERROR]',e);socket.emit('room:error',{message:e.message||'Gagal bergabung room.'});}});
   socket.on('presence:update',async patch=>{const s=sessions.get(socket.id);if(!s)return;if(typeof patch?.micStatus==='boolean')s.micStatus=patch.micStatus;if(typeof patch?.floorStatus==='string')s.floorStatus=patch.floorStatus;s.timestamp=Date.now();await savePresence(s);io.to(s.room).emit('room:users',roomUsers(s.room));emitPresence();});
   socket.on('floor:event',event=>{const s=sessions.get(socket.id);if(!s?.room)return;socket.to(s.room).emit('floor:event',{...event,from:s.nama});});
   socket.on('chat:send',async(payload,ack)=>{try{const s=sessions.get(socket.id);if(!s?.room){ack?.({ok:false,message:'Belum masuk channel.'});return;}const message=String(payload?.message||'').trim().slice(0,2000);if(!message){ack?.({ok:false,message:'Pesan kosong.'});return;}if(db){const ur=await db.query(`SELECT muted,active,banned FROM users WHERE lower(username)=lower($1) LIMIT 1`,[s.nama]);if(ur.rows[0]?.muted||!ur.rows[0]?.active||ur.rows[0]?.banned){ack?.({ok:false,message:'Akun tidak diizinkan mengirim pesan.'});return;}await db.query(`INSERT INTO chat_messages(username,group_name,channel_name,message) VALUES($1,$2,$3,$4)`,[s.nama,s.group,s.channel,message]);}io.to(s.room).emit('chat:message',{nama:s.nama,message});ack?.({ok:true});}catch(e){console.error('[CHAT ERROR]',e.message);socket.emit('chat:error',{message:'Pesan gagal dikirim.'});ack?.({ok:false,message:'Pesan gagal dikirim.'});}});
   socket.on('admin:kick',async ({nama},ack)=>{
     if(!nama) return ack?.({ok:false,message:'Target user wajib diisi.'});
-    const adminToken=String(socket.handshake?.auth?.adminToken||'').trim();
-    let admin=socket.data.admin||null;
-    if(!admin && adminToken && db) admin=await getAdminFromToken(adminToken);
-    const legacyAllowed=String(process.env.LEGACY_ADMIN_SOCKET_KICK||'true').toLowerCase()==='true';
-    if(!admin && !legacyAllowed) return ack?.({ok:false,message:'Admin Socket Token diperlukan.'});
-    if(!admin && legacyAllowed) console.warn('[SECURITY] Legacy admin:kick accepted; migrate Web V2 to Admin Token.');
-    kicked.set(nama,Date.now()+300000);
+    const admin=socket.data.admin||null;
+    if(!admin) return ack?.({ok:false,message:'Admin Socket Token diperlukan.'});
+    kicked.set(nama,Date.now()+KICK_DURATION_MS);
     for(const s of sessions.values()) if(s.nama===nama){
       io.to(s.socketId).emit('admin:kick',{nama,expiresAt:kicked.get(nama)});
       io.sockets.sockets.get(s.socketId)?.disconnect(true);
     }
-    if(db) await auditAdmin(admin||{admin_name:ADMIN_NAME},'USER_KICK',nama,'Socket kick');
+    if(db) await auditAdmin(admin,'USER_KICK',nama,'Socket kick');
     ack?.({ok:true});
   });
-  socket.on('disconnect',async reason=>{const s=sessions.get(socket.id);console.log('[SOCKET] Disconnect:',socket.id,reason);if(!s)return;rooms.get(s.room)?.delete(socket.id);if(rooms.get(s.room)?.size===0)rooms.delete(s.room);sessions.delete(socket.id);await removePresence(socket.id);if(s.room)io.to(s.room).emit('room:users',roomUsers(s.room));emitPresence();});
+  socket.on('disconnect',async reason=>{const s=sessions.get(socket.id);console.log('[SOCKET] Disconnect:',socket.id,reason);if(!s)return;await writeActivity(s.nama,s.group,s.channel,'KELUAR');rooms.get(s.room)?.delete(socket.id);if(rooms.get(s.room)?.size===0)rooms.delete(s.room);sessions.delete(socket.id);await removePresence(socket.id);if(s.room)io.to(s.room).emit('room:users',roomUsers(s.room));emitPresence();});
 });
 setInterval(cleanupExpiredRecordings, 15 * 60 * 1000);
 
-setInterval(async()=>{const cutoff=Date.now()-65000;for(const[id,s]of sessions)if(s.timestamp<cutoff){rooms.get(s.room)?.delete(id);sessions.delete(id);await removePresence(id);}emitPresence();},15000);
+// Expired auth/admin sessions would otherwise accumulate forever.
+async function cleanupExpiredAuthSessions(){
+  if(!db) return;
+  try {
+    const users=await db.query(`DELETE FROM auth_sessions WHERE expires_at<=NOW() OR revoked_at IS NOT NULL`);
+    const admins=await db.query(`DELETE FROM admin_sessions WHERE expires_at<=NOW() OR revoked_at IS NOT NULL`);
+    if(users.rowCount||admins.rowCount) console.log('[AUTH] Session cleanup:',users.rowCount,'user,',admins.rowCount,'admin');
+  } catch(e) { console.error('[AUTH] SESSION CLEANUP ERROR:',e.message); }
+}
+setInterval(cleanupExpiredAuthSessions, 60 * 60 * 1000);
+
+setInterval(async()=>{
+  const now=Date.now();
+  const cutoff=now-STALE_SESSION_MS;
+  for(const[id,s]of sessions)if(s.timestamp<cutoff){rooms.get(s.room)?.delete(id);sessions.delete(id);await removePresence(id);await writeActivity(s.nama,s.group,s.channel,'KELUAR');}
+  for(const[nama,until]of kicked)if(until<=now)kicked.delete(nama);
+  emitPresence();
+},15000);
 
 async function startServer(){console.log('========================================');console.log(' Komunikasi Group V2 Backend');console.log(` Version ${SERVER_VERSION}`);console.log('========================================');await testDatabase();await initializeDatabase();server.listen(PORT,()=>{console.log(`[SERVER] Listening on port ${PORT}`);console.log(`[SERVER] PostgreSQL: ${db?'ENABLED':'DISABLED'}`);});}
 startServer();
