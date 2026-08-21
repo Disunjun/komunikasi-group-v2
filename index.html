@@ -733,7 +733,7 @@
                     </div>
                     <div class="recording-buttons">
                         <button class="rec-btn rec-btn-channel" id="recChannelBtn" onclick="toggleRecordChannel()">🔴 REC CHANNEL</button>
-                        <button class="rec-btn rec-btn-local" id="recLocalBtn" onclick="toggleRecordLocal()">🎙️ REC LOCAL</button>
+                        <button class="rec-btn rec-btn-local" id="recLocalBtn" onclick="toggleRecordLocal()">🎙️ VOICE NOTE</button>
                     </div>
                     <div class="rec-timer" id="recTimer" style="display:none;">00:00</div>
                     <div id="recStatus" class="petunjuk" style="text-align:center;"></div>
@@ -2589,7 +2589,7 @@ function stopNetworkSpeedMonitor() {
 
 // ========== RECORDING V1/P1 ==========
 // REC CHANNEL: mixed channel audio -> IndexedDB (private local archive).
-// REC LOCAL: microphone only -> server voice note for the active group/channel.
+// VOICE NOTE: microphone only -> server voice note for the active group/channel.
 
 const REC_MAX_DURATION_MS = 5 * 60 * 1000;
 const REC_MAX_SIZE_BYTES = 25 * 1024 * 1024;
@@ -2682,7 +2682,7 @@ function updateRecordingUI(activeType = "") {
     if(localBtn) {
         localBtn.disabled = recordChannelActive;
         localBtn.classList.toggle("rec-btn-stop", recordLocalActive);
-        localBtn.textContent = recordLocalActive ? "⏹ STOP LOCAL" : "🎙️ REC LOCAL";
+        localBtn.textContent = recordLocalActive ? "⏹ STOP LOCAL" : "🎙️ VOICE NOTE";
     }
     if(status) {
         status.textContent =
@@ -2866,7 +2866,7 @@ async function toggleRecordLocal() {
         return;
     }
     if(!userToken) {
-        toast("Silakan login kembali untuk REC LOCAL.", "merah");
+        toast("Silakan login kembali untuk VOICE NOTE.", "merah");
         return;
     }
     if(!grupAktif || !channelAktif) {
@@ -2883,8 +2883,8 @@ async function toggleRecordLocal() {
         };
         recordLocalRecorder.onstop = uploadRecordLocal;
         recordLocalRecorder.onerror = e => {
-            console.error("[REC LOCAL]", e);
-            toast("REC LOCAL gagal.", "merah");
+            console.error("[VOICE NOTE]", e);
+            toast("VOICE NOTE gagal.", "merah");
             cleanupRecordLocal();
         };
         recordLocalRecorder.start(1000);
@@ -2893,10 +2893,10 @@ async function toggleRecordLocal() {
         recordStartTime = Date.now();
         updateRecordingUI("local");
         startRecordingTimer();
-        toast("🎙️ REC LOCAL dimulai.", "biru");
+        toast("🎙️ VOICE NOTE dimulai.", "biru");
     } catch(e) {
-        console.error("[REC LOCAL] start:", e);
-        toast("Gagal memulai REC LOCAL: " + e.message, "merah");
+        console.error("[VOICE NOTE] start:", e);
+        toast("Gagal memulai VOICE NOTE: " + e.message, "merah");
         cleanupRecordLocal();
     }
 }
@@ -2921,7 +2921,7 @@ async function uploadRecordLocal() {
         return;
     }
     if(blob.size > REC_MAX_SIZE_BYTES) {
-        toast("REC LOCAL melebihi batas 25 MB.", "merah");
+        toast("VOICE NOTE melebihi batas 25 MB.", "merah");
         return;
     }
 
@@ -2943,8 +2943,8 @@ async function uploadRecordLocal() {
         toast("🎙️ Voice note tersimpan dan tersedia di channel aktif.", "hijau");
         await renderRecordingList();
     } catch(e) {
-        console.error("[REC LOCAL] upload:", e);
-        toast("Upload REC LOCAL gagal: " + e.message, "merah");
+        console.error("[VOICE NOTE] upload:", e);
+        toast("Upload VOICE NOTE gagal: " + e.message, "merah");
     }
 }
 
@@ -2975,7 +2975,7 @@ async function renderRecordingList() {
         const data = await r.json().catch(() => null);
         if(r.ok && data?.ok) serverRows = data.recordings || [];
     } catch(e) {
-        console.warn("[REC LOCAL] List failed:", e?.message || e);
+        console.warn("[VOICE NOTE] List failed:", e?.message || e);
     }
 
     const rows = [
@@ -3065,7 +3065,7 @@ async function deleteRecordingV1(id, type) {
             });
             const data = await r.json().catch(() => null);
             if(!r.ok || !data?.ok) throw new Error(data?.message || "Gagal menghapus.");
-            toast("REC LOCAL dihapus.", "kuning");
+            toast("VOICE NOTE dihapus.", "kuning");
         }
         await renderRecordingList();
     } catch(e) {
