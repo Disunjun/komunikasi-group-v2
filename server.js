@@ -106,60 +106,13 @@ async function testDatabase() {
 async function initializeDatabase() {
   if (!db) return;
   try {
-    await db.query(`CREATE TABLE IF NOT EXISTS users (id BIGSERIAL PRIMARY KEY, username VARCHAR(100) UNIQUE NOT NULL, password_hash TEXT, role VARCHAR(30) DEFAULT 'user', active BOOLEAN DEFAULT TRUE, muted BOOLEAN DEFAULT FALSE, created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW())`);
-    await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS banned BOOLEAN DEFAULT FALSE`);
-    await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS created_by VARCHAR(100) DEFAULT 'system'`);
-    await db.query(`CREATE TABLE IF NOT EXISTS online_sessions (socket_id VARCHAR(255) PRIMARY KEY, username VARCHAR(100) NOT NULL, group_name VARCHAR(100), channel_name VARCHAR(100), peer_id VARCHAR(255), mic_status BOOLEAN DEFAULT FALSE, floor_status VARCHAR(30) DEFAULT 'idle', updated_at TIMESTAMPTZ DEFAULT NOW())`);
-    await db.query(`CREATE TABLE IF NOT EXISTS chat_messages (id BIGSERIAL PRIMARY KEY, username VARCHAR(100) NOT NULL, group_name VARCHAR(100), channel_name VARCHAR(100), message TEXT NOT NULL, created_at TIMESTAMPTZ DEFAULT NOW())`);
-    await db.query(`CREATE TABLE IF NOT EXISTS auth_sessions (id BIGSERIAL PRIMARY KEY,user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,token_hash CHAR(64) UNIQUE NOT NULL,created_at TIMESTAMPTZ DEFAULT NOW(),last_used_at TIMESTAMPTZ DEFAULT NOW(),expires_at TIMESTAMPTZ NOT NULL,revoked_at TIMESTAMPTZ)`);
-    await db.query(`CREATE INDEX IF NOT EXISTS idx_auth_sessions_token_hash ON auth_sessions(token_hash)`);
-    await db.query(`CREATE INDEX IF NOT EXISTS idx_auth_sessions_user_id ON auth_sessions(user_id)`);
-    await db.query(`CREATE INDEX IF NOT EXISTS idx_auth_sessions_expires_at ON auth_sessions(expires_at)`);
-    await db.query(`CREATE TABLE IF NOT EXISTS admin_sessions (id BIGSERIAL PRIMARY KEY,admin_user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,token_hash CHAR(64) UNIQUE NOT NULL,created_at TIMESTAMPTZ DEFAULT NOW(),last_used_at TIMESTAMPTZ DEFAULT NOW(),expires_at TIMESTAMPTZ NOT NULL,revoked_at TIMESTAMPTZ)`);
-    await db.query(`CREATE INDEX IF NOT EXISTS idx_admin_sessions_token_hash ON admin_sessions(token_hash)`);
-    await db.query(`CREATE INDEX IF NOT EXISTS idx_admin_sessions_admin_user_id ON admin_sessions(admin_user_id)`);
-    await db.query(`DELETE FROM admin_sessions WHERE expires_at<=NOW() OR revoked_at IS NOT NULL`);
-    await db.query(`DELETE FROM auth_sessions WHERE expires_at<=NOW() OR revoked_at IS NOT NULL`);
-    // ===== ADMIN SYNC STAGE A: PostgreSQL schema only =====
-    await db.query(`CREATE TABLE IF NOT EXISTS app_config (
-      config_key VARCHAR(100) PRIMARY KEY,
-      config_value JSONB NOT NULL,
-      updated_by VARCHAR(100) DEFAULT 'system',
-      updated_at TIMESTAMPTZ DEFAULT NOW()
-    )`);
-
-    await db.query(`CREATE TABLE IF NOT EXISTS audit_logs (
-      id BIGSERIAL PRIMARY KEY,
-      admin_name VARCHAR(100) NOT NULL,
-      action VARCHAR(100) NOT NULL,
-      target TEXT,
-      detail TEXT,
-      created_at TIMESTAMPTZ DEFAULT NOW()
-    )`);
-
-    const defaultGroups = [
-      {nama:'Grup 1',prefix:'',status:'aktif',channel:[
-        {nama:'CH 01',prefix:'',maxUsers:0,pttTimeout:0,status:'aktif',locked:false,muted:false},
-        {nama:'CH 02',prefix:'',maxUsers:5,pttTimeout:30,status:'aktif',locked:false,muted:false},
-        {nama:'CH 03',prefix:'',maxUsers:0,pttTimeout:0,status:'aktif',locked:false,muted:false}
-      ]},
-      {nama:'Grup 2',prefix:'',status:'aktif',channel:[
-        {nama:'CH 01',prefix:'',maxUsers:0,pttTimeout:0,status:'aktif',locked:false,muted:false},
-        {nama:'CH 02',prefix:'',maxUsers:3,pttTimeout:15,status:'aktif',locked:false,muted:false}
-      ]}
-    ];
-
-    await db.query(
-      `INSERT INTO app_config(config_key,config_value,updated_by)
-       VALUES($1,$2::jsonb,$3)
-       ON CONFLICT(config_key) DO NOTHING`,
-      ['groups', JSON.stringify(defaultGroups), 'system']
-    );
-
-    const adminHash = await hashPassword(ADMIN_PASSWORD);
-    await db.query(`INSERT INTO users(username,password_hash,role,active,banned,muted,created_by) VALUES($1,$2,'admin',TRUE,FALSE,FALSE,'system') ON CONFLICT(username) DO UPDATE SET role='admin'`, [ADMIN_NAME, adminHash]);
-    console.log('[DB] Database tables READY.');
-  } catch(e) { console.error('[DB] Database initialization ERROR:', e.message); }
+    // Database schema is managed exclusively through Supabase SQL Editor.
+    // server.js must NOT create tables, columns, indexes, default groups, or default admin.
+    await db.query('SELECT 1');
+    console.log('[DB] Database schema check OK. Schema is managed by Supabase SQL Editor.');
+  } catch(e) {
+    console.error('[DB] Database schema check ERROR:', e.message);
+  }
 }
 
 // ===== USER / AUTH API =====
