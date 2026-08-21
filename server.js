@@ -1,6 +1,5 @@
-KOMUNIKASI GROUP V2 — FULL SERVER.JS
-Recording V1/P1 integration
-=====================================
+// KOMUNIKASI GROUP V2 — FULL SERVER.JS
+// Recording V1/P1 integration
 
 Base:
 - Komunikasi Group V2 backend 2.4.1-E / A1.5
