@@ -894,7 +894,7 @@
 <script>
 
 // ========== KONFIGURASI & STATE ==========
-const ADMIN_NAMA = "Didik Suntoro";
+let ADMIN_NAMA = window.ADMIN_NAMA || "Didik Suntoro";
 let userToken = sessionStorage.getItem("kgUserToken") || "";
 let userTokenExpiresAt = sessionStorage.getItem("kgUserTokenExpiresAt") || "";
 let adminToken = sessionStorage.getItem("kgAdminToken") || "";
@@ -2290,6 +2290,7 @@ function initAdminRealtimeSocket() {
 
     socket = io(REALTIME_SERVER_URL, {
         transports:["websocket","polling"],
+        auth:{ adminToken },
         reconnection:true,
         reconnectionAttempts:Infinity,
         reconnectionDelay:800,
@@ -2370,7 +2371,13 @@ function initRealtimeSocket() {
         toast("⚠️ URL backend realtime belum diatur.", "merah", 7000);
         return false;
     }
-    socket = io(REALTIME_SERVER_URL, { transports:["websocket","polling"], reconnection:true, timeout:8000 });
+    if(!userToken && !adminToken) {
+        document.getElementById("statusKoneksi").className = "status status-merah";
+        document.getElementById("statusKoneksi").innerHTML = "❌ <b>Session habis.</b> Silakan login kembali.";
+        toast("⚠️ Session tidak tersedia. Silakan login kembali.", "merah", 7000);
+        return false;
+    }
+    socket = io(REALTIME_SERVER_URL, { transports:["websocket","polling"], auth:{ token:userToken, adminToken }, reconnection:true, timeout:8000 });
     socket.on("connect", () => { realtimeConnected = true; if(peerIdSaya) joinRealtimeRoom(); });
     socket.on("disconnect", () => { realtimeConnected = false; });
     socket.on("server:ready", data => console.log("Realtime server ready", data));
@@ -2398,17 +2405,7 @@ function initRealtimeSocket() {
         try { if(adminTabAktif === 'channels') renderChannels(); } catch(_) {}
         try { muatDaftarGrup(); } catch(_) {}
     });
-    socket.on("audit:new", log => {
-        try {
-            const item = normalizeServerAudit(log);
-            serverAuditLogs = [item, ...serverAuditLogs.filter(x => String(x.id) !== String(item.id))].slice(0,500);
-            if(adminTabAktif === 'audit') renderAudit();
-            scheduleAdminRealtimeSync("audit:new");
-            console.log("[AUDIT] Realtime PostgreSQL log diterima:", item.aksi);
-        } catch(err) {
-            console.warn("[AUDIT] Realtime parse gagal:", err);
-        }
-    });
+    // Event audit:new hanya dikirim server ke socket admin (lihat initAdminRealtimeSocket).
     socket.on("presence:update", sessions => {
         serverSessions = normalizeServerSessions(sessions);
         const counts = {};
@@ -2452,7 +2449,7 @@ function joinRealtimeRoom() {
     if(!socket || !realtimeConnected || !peerIdSaya) return;
     const grup = ambilData("daftarGrup").find(g => g.nama === grupAktif);
     const ch = grup?.channel?.find(c => c.nama === channelAktif);
-    socket.emit("room:join", { nama:namaSaya, group:grupAktif, channel:channelAktif, peerId:peerIdSaya, maxUsers:ch?.maxUsers || 0 });
+    socket.emit("room:join", { group:grupAktif, channel:channelAktif, peerId:peerIdSaya, maxUsers:ch?.maxUsers || 0 });
 }
 function syncPresenceToServer() {
     if(socket && realtimeConnected) socket.emit("presence:update", { micStatus:micAktif, floorStatus:myFloorStatus });
@@ -4218,6 +4215,18 @@ document.querySelectorAll('.modal-overlay').forEach(overlay => {
 
 // ========== THEME INIT ==========
 loadTheme();
+
+// ========== SYNC NAMA ADMIN DARI SERVER ==========
+// Nama admin ditentukan oleh env ADMIN_NAME di backend, bukan hardcode di client.
+(async () => {
+    try {
+        const r = await fetch(`${REALTIME_SERVER_URL}/api/config/app`, { cache: "no-store" });
+        const data = await r.json();
+        if(data?.ok && data.adminName) ADMIN_NAMA = data.adminName;
+    } catch(err) {
+        console.warn("[CONFIG] Gagal memuat konfigurasi app:", err?.message || err);
+    }
+})();
 
 // ========== SERVICE WORKER REGISTRATION (PWA) ==========
 
