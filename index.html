@@ -366,23 +366,27 @@
         .status-biru { background:var(--status-biru); color: var(--text); border-left: 4px solid #2563eb; }
         .status-abu { background:var(--status-abu); color: var(--text); border-left: 4px solid #475569; }
         .status-ungu { background:var(--status-ungu); color: var(--text); border-left: 4px solid #9333ea; }
-
-
-        /* Channel Recording */
+        /* ========== RECORDING V1/P1 ========== */
         .recording-panel { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 12px; margin: 10px 0; }
         .recording-panel.recording-active { border-color: #dc2626; box-shadow: 0 0 10px rgba(220,38,38,0.2); }
-        .rec-btn { width: 100%; padding: 10px; border-radius: 8px; border: none; font-weight: bold; cursor: pointer; transition: 0.2s; font-size: 14px; }
-        .rec-btn-start { background: #991b1b; color: white; }
-        .rec-btn-start:hover { background: #b91c1c; }
-        .rec-btn-stop { background: #166534; color: white; animation: pulse 1.5s infinite; }
-        .rec-btn-stop:hover { background: #15803d; }
-        .rec-list { margin-top: 10px; max-height: 200px; overflow-y: auto; }
-        .rec-item { background: var(--hover); padding: 8px 10px; border-radius: 6px; margin: 4px 0; font-size: 12px; display: flex; justify-content: space-between; align-items: center; }
-        .rec-item-name { font-weight: 600; color: var(--text); }
-        .rec-item-meta { color: var(--muted); font-size: 11px; }
-        .rec-item-actions { display: flex; gap: 4px; }
-        .rec-timer { text-align: center; font-size: 18px; font-weight: bold; color: #ef4444; margin: 6px 0; font-family: monospace; }
-        .rec-indicator { display: inline-block; width: 8px; height: 8px; background: #ef4444; border-radius: 50%; margin-right: 6px; animation: pulse 1s infinite; }
+        .recording-title { display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; }
+        .recording-title span { font-size:13px; font-weight:600; color:var(--text); }
+        .recording-buttons { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+        .rec-btn { width:100%; padding:10px 8px; border-radius:8px; border:none; font-weight:bold; cursor:pointer; transition:0.2s; font-size:13px; }
+        .rec-btn-channel { background:#991b1b; color:white; }
+        .rec-btn-channel:hover { background:#b91c1c; }
+        .rec-btn-local { background:#2563eb; color:white; }
+        .rec-btn-local:hover { background:#1d4ed8; }
+        .rec-btn-stop { background:#166534 !important; color:white; animation:pulse 1.5s infinite; }
+        .rec-btn:disabled { opacity:.5; cursor:not-allowed; }
+        .rec-timer { text-align:center; font-size:16px; font-weight:bold; color:#ef4444; margin:6px 0; font-family:monospace; }
+        .rec-indicator { display:inline-block; width:8px; height:8px; background:#ef4444; border-radius:50%; margin-right:6px; animation:pulse 1s infinite; }
+        .rec-list { margin-top:10px; max-height:200px; overflow-y:auto; }
+        .rec-item { background:var(--hover); padding:8px 10px; border-radius:6px; margin:4px 0; font-size:12px; display:flex; justify-content:space-between; align-items:center; gap:8px; }
+        .rec-item-name { font-weight:600; color:var(--text); }
+        .rec-item-meta { color:var(--muted); font-size:11px; }
+        .rec-item-actions { display:flex; gap:4px; flex-shrink:0; }
+
 
         /* Scrollbar */
         ::-webkit-scrollbar { width: 8px; height: 8px; }
@@ -721,18 +725,18 @@
                     <div class="timeout-fill" id="timeoutFill"></div>
                 </div>
                 <div class="ptt-hint">Desktop: tahan <b>SPACE</b> | Mobile: tahan tombol</div>
-
-                <!-- Recording V1/P1: isolated from existing voice/PTT path -->
+                <!-- Recording V1/P1 -->
                 <div class="recording-panel" id="recordingPanel">
-                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-                        <span style="font-size:13px; font-weight:600; color:var(--text);">📼 Channel Recording V1/P1</span>
+                    <div class="recording-title">
+                        <span>🎙️ Recording</span>
                         <span id="recBadge" style="display:none;"><span class="rec-indicator"></span>REC</span>
                     </div>
-                    <div id="recContext" style="font-size:11px;color:var(--muted);margin-bottom:6px;"></div>
-                    <div id="recLimit" style="font-size:11px;color:var(--muted);margin-bottom:6px;">Batas: 05:00 • 25 MB</div>
+                    <div class="recording-buttons">
+                        <button class="rec-btn rec-btn-channel" id="recChannelBtn" onclick="toggleRecordChannel()">🔴 REC CHANNEL</button>
+                        <button class="rec-btn rec-btn-local" id="recLocalBtn" onclick="toggleRecordLocal()">🎙️ REC LOCAL</button>
+                    </div>
                     <div class="rec-timer" id="recTimer" style="display:none;">00:00</div>
-                    <button class="rec-btn rec-btn-start" id="recBtn" onclick="toggleRecording()">🔴 Mulai Rekam</button>
-                    <div id="recStatus" style="font-size:11px;color:var(--muted);margin-top:6px;text-align:center;"></div>
+                    <div id="recStatus" class="petunjuk" style="text-align:center;"></div>
                     <div class="rec-list" id="recList"></div>
                 </div>
 
@@ -893,7 +897,6 @@
 const ADMIN_NAMA = "Didik Suntoro";
 let userToken = sessionStorage.getItem("kgUserToken") || "";
 let userTokenExpiresAt = sessionStorage.getItem("kgUserTokenExpiresAt") || "";
-let userIdSaya = Number(sessionStorage.getItem("kgUserId") || 0) || null;
 let adminToken = sessionStorage.getItem("kgAdminToken") || "";
 let adminTokenExpiresAt = sessionStorage.getItem("kgAdminTokenExpiresAt") || "";
 let namaSaya = "", channelAktif = "", grupAktif = "", peer = null, koneksi = {}, streamSaya = null;
@@ -908,21 +911,19 @@ let timeoutInterval = null;
 let whisperMode = false;
 let whisperTarget = null;
 let pttTimeoutSeconds = 0;
-let isRecording = false;
-let mediaRecorder = null;
-let recordedChunks = [];
-let recordingStartTime = 0;
-let recordingTimerInterval = null;
-let recordingAutoStopTimer = null;
-let recordingDurationMs = 0;
-let recordingMimeType = "audio/webm";
-let recordingBytes = 0;
-let serverRecordings = [];
-const RECORDING_UI_MAX_SIZE_BYTES = 25 * 1024 * 1024;
-const RECORDING_UI_MAX_DURATION_MS = 5 * 60 * 1000;
-let audioContext = null;
-let destinationNode = null;
-let mixedStream = null;
+let recordChannelActive = false;
+let recordLocalActive = false;
+let recordChannelRecorder = null;
+let recordLocalRecorder = null;
+let recordChannelChunks = [];
+let recordLocalChunks = [];
+let recordStartTime = 0;
+let recordTimerInterval = null;
+let recordChannelContext = null;
+let recordChannelDestination = null;
+let recordChannelSources = new Map();
+let recordingListInterval = null;
+let localRecordingClientId = null;
 let adminTabAktif = 'users';
 let editUserTarget = null;
 let serverUsers = []; // PostgreSQL-backed user cache (admin UI only)
@@ -1204,10 +1205,8 @@ async function keluarSistem() {
     namaSaya = "";
     userToken = "";
     userTokenExpiresAt = "";
-    userIdSaya = null;
     sessionStorage.removeItem("kgUserToken");
     sessionStorage.removeItem("kgUserTokenExpiresAt");
-    sessionStorage.removeItem("kgUserId");
     stopChannelCountRefresh();
     if(monitoringInterval) clearInterval(monitoringInterval);
     if(socket) { try { socket.disconnect(); } catch(_) {} }
@@ -1240,10 +1239,8 @@ async function apiRequest(path, options = {}, admin = false) {
         } else if(userToken) {
             userToken = "";
             userTokenExpiresAt = "";
-            userIdSaya = null;
             sessionStorage.removeItem("kgUserToken");
             sessionStorage.removeItem("kgUserTokenExpiresAt");
-            sessionStorage.removeItem("kgUserId");
         }
         namaSaya = "";
         if(socket) { try { socket.disconnect(); } catch(_) {} }
@@ -1306,8 +1303,6 @@ async function masukSistem() {
         sessionStorage.setItem("kgUserToken", userToken);
         if(userTokenExpiresAt) sessionStorage.setItem("kgUserTokenExpiresAt", userTokenExpiresAt);
         namaSaya = data.user?.nama || nama;
-        userIdSaya = Number(data.user?.id || 0) || null;
-        if(userIdSaya) sessionStorage.setItem("kgUserId", String(userIdSaya));
         tampilHalaman("halamanDaftar");
         await muatGroupsPostgreSQL(true);
         muatDaftarGrup();
@@ -2385,7 +2380,6 @@ function initRealtimeSocket() {
         if(!daftarNamaTerhubung.includes(namaSaya)) daftarNamaTerhubung.unshift(namaSaya);
         perbaruiDaftarPengguna();
         sinkronkanPeerUsers(data.users || []);
-        loadRecordingsForActiveChannel();
     });
     socket.on("room:users", users => {
         serverSessions = Object.fromEntries((users || []).map(u => [u.nama, u]));
@@ -2452,12 +2446,6 @@ function initRealtimeSocket() {
     socket.on("room:error", e => toast("❌ " + (e?.message || "Gagal masuk room"), "merah", 6000));
     socket.on("admin:kick", () => { toast("Anda telah di-kick oleh admin!", "merah", 5000); keluarChannel(); });
     socket.on("floor:event", receiveFloorState);
-    socket.on("recording:new", data => {
-        if(data?.recording?.group === grupAktif && data?.recording?.channel === channelAktif) {
-            upsertServerRecording(data.recording);
-            renderRecList();
-        }
-    });
     return true;
 }
 function joinRealtimeRoom() {
@@ -2597,326 +2585,521 @@ function stopNetworkSpeedMonitor() {
     if(el) el.textContent = "📡 Network: -- kb/s";
 }
 
-// ========== CHANNEL RECORDING V1/P1 ==========
-// This module uses the existing mixed audio path only for capture.
-// It does not alter PTT, WebRTC signaling, Socket.IO presence, or peer calls.
-function toggleRecording() {
-    if(isRecording) stopRecording();
-    else startRecording();
+// ========== CHANNEL RECORDING ==========
+
+// ========== RECORDING V1/P1 ==========
+// REC CHANNEL: mixed channel audio -> IndexedDB (private local archive).
+// REC LOCAL: microphone only -> server voice note for the active group/channel.
+
+const REC_MAX_DURATION_MS = 5 * 60 * 1000;
+const REC_MAX_SIZE_BYTES = 25 * 1024 * 1024;
+const REC_DB_NAME = "KomGrupRecordingV1";
+const REC_DB_VERSION = 1;
+const REC_STORE = "channel_recordings";
+
+function recordingAuthHeaders(extra = {}) {
+    const h = { "Accept": "application/json", ...extra };
+    if (userToken) h["Authorization"] = `Bearer ${userToken}`;
+    return h;
 }
 
-function updateRecordingContext() {
-    const ctx = document.getElementById("recContext");
-    if(ctx) ctx.textContent = grupAktif && channelAktif ? `${grupAktif} / ${channelAktif}` : "Channel belum aktif";
+function recordingChannelKey() {
+    return `${grupAktif || ""}::${channelAktif || ""}`;
 }
 
-function setRecordingStatus(message, type = "normal") {
-    const el = document.getElementById("recStatus");
-    if(!el) return;
-    el.textContent = message || "";
-    el.style.color = type === "error" ? "#fca5a5" : type === "success" ? "#86efac" : "var(--muted)";
+function openRecordingDB() {
+    return new Promise((resolve, reject) => {
+        const req = indexedDB.open(REC_DB_NAME, REC_DB_VERSION);
+        req.onupgradeneeded = () => {
+            const db = req.result;
+            if (!db.objectStoreNames.contains(REC_STORE)) {
+                const store = db.createObjectStore(REC_STORE, { keyPath: "id" });
+                store.createIndex("channelKey", "channelKey", { unique:false });
+            }
+        };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+    });
 }
 
-function startRecording() {
-    if(!channelAktif || !grupAktif) {
-        toast("Pilih Group/Channel terlebih dahulu.", "merah");
+async function saveChannelRecordingLocal(record) {
+    const db = await openRecordingDB();
+    await new Promise((resolve, reject) => {
+        const tx = db.transaction(REC_STORE, "readwrite");
+        tx.objectStore(REC_STORE).put(record);
+        tx.oncomplete = resolve;
+        tx.onerror = () => reject(tx.error);
+    });
+    db.close();
+}
+
+async function listChannelRecordingsLocal() {
+    try {
+        const db = await openRecordingDB();
+        const rows = await new Promise((resolve, reject) => {
+            const tx = db.transaction(REC_STORE, "readonly");
+            const req = tx.objectStore(REC_STORE).index("channelKey").getAll(recordingChannelKey());
+            req.onsuccess = () => resolve(req.result || []);
+            req.onerror = () => reject(req.error);
+        });
+        db.close();
+        return rows.sort((a,b) => b.createdAt - a.createdAt);
+    } catch(e) {
+        console.warn("[REC CHANNEL] Local DB read failed:", e);
+        return [];
+    }
+}
+
+async function deleteChannelRecordingLocal(id) {
+    const db = await openRecordingDB();
+    await new Promise((resolve, reject) => {
+        const tx = db.transaction(REC_STORE, "readwrite");
+        tx.objectStore(REC_STORE).delete(id);
+        tx.oncomplete = resolve;
+        tx.onerror = () => reject(tx.error);
+    });
+    db.close();
+}
+
+function updateRecordingUI(activeType = "") {
+    const panel = document.getElementById("recordingPanel");
+    const badge = document.getElementById("recBadge");
+    const timer = document.getElementById("recTimer");
+    const status = document.getElementById("recStatus");
+    const channelBtn = document.getElementById("recChannelBtn");
+    const localBtn = document.getElementById("recLocalBtn");
+
+    const active = !!activeType;
+    if(panel) panel.classList.toggle("recording-active", active);
+    if(badge) badge.style.display = active ? "inline" : "none";
+    if(timer) timer.style.display = active ? "block" : "none";
+
+    if(channelBtn) {
+        channelBtn.disabled = recordLocalActive;
+        channelBtn.classList.toggle("rec-btn-stop", recordChannelActive);
+        channelBtn.textContent = recordChannelActive ? "⏹ STOP CHANNEL" : "🔴 REC CHANNEL";
+    }
+    if(localBtn) {
+        localBtn.disabled = recordChannelActive;
+        localBtn.classList.toggle("rec-btn-stop", recordLocalActive);
+        localBtn.textContent = recordLocalActive ? "⏹ STOP LOCAL" : "🎙️ REC LOCAL";
+    }
+    if(status) {
+        status.textContent =
+            activeType === "channel" ? "Merekam seluruh audio channel ke perangkat ini." :
+            activeType === "local" ? "Merekam microphone. Akan dikirim sebagai voice note ke channel aktif." : "";
+    }
+}
+
+function startRecordingTimer() {
+    if(recordTimerInterval) clearInterval(recordTimerInterval);
+    recordTimerInterval = setInterval(() => {
+        const elapsed = Date.now() - recordStartTime;
+        const sec = Math.floor(elapsed / 1000);
+        const el = document.getElementById("recTimer");
+        if(el) el.textContent = formatDuration(sec);
+        if(elapsed >= REC_MAX_DURATION_MS) {
+            if(recordChannelActive) stopRecordChannel();
+            else if(recordLocalActive) stopRecordLocal();
+        }
+    }, 250);
+}
+
+function stopRecordingTimer() {
+    if(recordTimerInterval) {
+        clearInterval(recordTimerInterval);
+        recordTimerInterval = null;
+    }
+}
+
+function getSupportedRecordingMime() {
+    const types = [
+        "audio/webm;codecs=opus",
+        "audio/webm",
+        "audio/ogg;codecs=opus",
+        "audio/mp4"
+    ];
+    return types.find(t => window.MediaRecorder && MediaRecorder.isTypeSupported(t)) || "";
+}
+
+function addIncomingRecordingSource(stream) {
+    if(!recordChannelActive || !recordChannelContext || !recordChannelDestination || !stream) return;
+    try {
+        if(recordChannelSources.has(stream)) return;
+        const source = recordChannelContext.createMediaStreamSource(stream);
+        source.connect(recordChannelDestination);
+        recordChannelSources.set(stream, source);
+    } catch(e) {
+        console.warn("[REC CHANNEL] Incoming source failed:", e);
+    }
+}
+
+function removeRecordingAudioElements() {
+    // no-op: remote audio elements remain untouched.
+}
+
+async function toggleRecordChannel() {
+    if(recordChannelActive) {
+        stopRecordChannel();
+        return;
+    }
+    if(recordLocalActive) return;
+
+    if(!streamSaya) {
+        toast("Audio microphone belum siap.", "merah");
+        return;
+    }
+
+    try {
+        const Ctx = window.AudioContext || window.webkitAudioContext;
+        if(!Ctx) throw new Error("AudioContext tidak didukung browser.");
+
+        recordChannelContext = new Ctx();
+        if(recordChannelContext.state === "suspended") await recordChannelContext.resume();
+        recordChannelDestination = recordChannelContext.createMediaStreamDestination();
+
+        // Mic is one source.
+        const micSource = recordChannelContext.createMediaStreamSource(streamSaya);
+        micSource.connect(recordChannelDestination);
+        recordChannelSources = new Map([[streamSaya, micSource]]);
+
+        // Existing remote audio streams.
+        document.querySelectorAll("audio").forEach(audioEl => {
+            if(audioEl.srcObject) addIncomingRecordingSource(audioEl.srcObject);
+        });
+
+        const mimeType = getSupportedRecordingMime();
+        recordChannelRecorder = new MediaRecorder(
+            recordChannelDestination.stream,
+            mimeType ? { mimeType } : {}
+        );
+        recordChannelChunks = [];
+        recordChannelRecorder.ondataavailable = e => {
+            if(e.data?.size) recordChannelChunks.push(e.data);
+        };
+        recordChannelRecorder.onstop = saveRecordChannel;
+        recordChannelRecorder.onerror = e => {
+            console.error("[REC CHANNEL]", e);
+            toast("REC CHANNEL gagal.", "merah");
+            cleanupRecordChannel();
+        };
+
+        recordChannelRecorder.start(1000);
+        recordChannelActive = true;
+        recordStartTime = Date.now();
+        updateRecordingUI("channel");
+        startRecordingTimer();
+        toast("🔴 REC CHANNEL dimulai.", "merah");
+    } catch(e) {
+        console.error("[REC CHANNEL] start:", e);
+        toast("Gagal memulai REC CHANNEL: " + e.message, "merah");
+        cleanupRecordChannel();
+    }
+}
+
+function stopRecordChannel() {
+    if(recordChannelRecorder && recordChannelRecorder.state !== "inactive") {
+        recordChannelRecorder.stop();
+    } else {
+        cleanupRecordChannel();
+    }
+}
+
+async function saveRecordChannel() {
+    const duration = Math.min(REC_MAX_DURATION_MS, Date.now() - recordStartTime);
+    const mimeType = recordChannelRecorder?.mimeType || "audio/webm";
+    const blob = new Blob(recordChannelChunks, { type:mimeType });
+
+    if(blob.size > 0 && blob.size <= REC_MAX_SIZE_BYTES) {
+        const id = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
+        await saveChannelRecordingLocal({
+            id,
+            channelKey: recordingChannelKey(),
+            group: grupAktif,
+            channel: channelAktif,
+            createdAt: Date.now(),
+            durationMs: Math.floor(duration),
+            sizeBytes: blob.size,
+            mimeType,
+            blob
+        });
+        toast(`REC CHANNEL tersimpan lokal (${formatDuration(Math.floor(duration/1000))}).`, "hijau");
+    } else if(blob.size > REC_MAX_SIZE_BYTES) {
+        toast("REC CHANNEL melebihi batas 25 MB.", "merah");
+    } else {
+        toast("Tidak ada audio terekam.", "kuning");
+    }
+
+    cleanupRecordChannel();
+    await renderRecordingList();
+}
+
+function cleanupRecordChannel() {
+    recordChannelActive = false;
+    stopRecordingTimer();
+    if(recordChannelRecorder) {
+        recordChannelRecorder.ondataavailable = null;
+        recordChannelRecorder = null;
+    }
+    recordChannelChunks = [];
+    for(const source of recordChannelSources.values()) {
+        try { source.disconnect(); } catch(_) {}
+    }
+    recordChannelSources.clear();
+    if(recordChannelContext) {
+        try { recordChannelContext.close(); } catch(_) {}
+        recordChannelContext = null;
+    }
+    recordChannelDestination = null;
+    updateRecordingUI(recordLocalActive ? "local" : "");
+}
+
+async function toggleRecordLocal() {
+    if(recordLocalActive) {
+        stopRecordLocal();
+        return;
+    }
+    if(recordChannelActive) return;
+
+    if(!streamSaya) {
+        toast("Audio microphone belum siap.", "merah");
         return;
     }
     if(!userToken) {
-        toast("Session user tidak tersedia. Silakan login kembali.", "merah");
+        toast("Silakan login kembali untuk REC LOCAL.", "merah");
         return;
     }
-    if(!streamSaya) {
-        toast("Tidak ada audio stream! Pastikan channel sudah terhubung.", "merah");
-        return;
-    }
-    if(!window.MediaRecorder) {
-        toast("Browser tidak mendukung MediaRecorder.", "merah");
+    if(!grupAktif || !channelAktif) {
+        toast("Group/channel aktif belum tersedia.", "merah");
         return;
     }
 
     try {
-        if(!audioContext) audioContext = new (window.AudioContext || window.webkitAudioContext)();
-        if(audioContext.state === 'suspended') audioContext.resume();
-
-        destinationNode = audioContext.createMediaStreamDestination();
-
-        // Existing microphone stream -> recording mixer.
-        const sourceOut = audioContext.createMediaStreamSource(streamSaya);
-        sourceOut.connect(destinationNode);
-
-        // Existing remote audio streams -> recording mixer.
-        document.querySelectorAll('audio').forEach(audioEl => {
-            if(audioEl.srcObject) {
-                try {
-                    const sourceIn = audioContext.createMediaStreamSource(audioEl.srcObject);
-                    sourceIn.connect(destinationNode);
-                } catch(_) {}
-            }
-        });
-
-        mixedStream = destinationNode.stream;
-
-        recordingMimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-            ? 'audio/webm;codecs=opus'
-            : (MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : '');
-
-        mediaRecorder = new MediaRecorder(mixedStream, recordingMimeType ? { mimeType: recordingMimeType } : {});
-        recordingMimeType = mediaRecorder.mimeType || recordingMimeType || 'audio/webm';
-        recordedChunks = [];
-        recordingBytes = 0;
-        recordingDurationMs = 0;
-
-        mediaRecorder.ondataavailable = e => {
-            if(!e.data || e.data.size <= 0) return;
-            recordedChunks.push(e.data);
-            recordingBytes += e.data.size;
-            if(recordingBytes > RECORDING_UI_MAX_SIZE_BYTES && isRecording) {
-                setRecordingStatus("Batas 25 MB tercapai. Menghentikan recording...", "error");
-                stopRecording();
-            }
+        const mimeType = getSupportedRecordingMime();
+        recordLocalRecorder = new MediaRecorder(streamSaya, mimeType ? { mimeType } : {});
+        recordLocalChunks = [];
+        recordLocalRecorder.ondataavailable = e => {
+            if(e.data?.size) recordLocalChunks.push(e.data);
         };
-
-        mediaRecorder.onstop = () => {
-            saveRecordingToBackend();
+        recordLocalRecorder.onstop = uploadRecordLocal;
+        recordLocalRecorder.onerror = e => {
+            console.error("[REC LOCAL]", e);
+            toast("REC LOCAL gagal.", "merah");
+            cleanupRecordLocal();
         };
-
-        mediaRecorder.onerror = e => {
-            console.error("[RECORDING] MediaRecorder error:", e);
-            setRecordingStatus("Recording error.", "error");
-            stopRecordingUI();
-        };
-
-        mediaRecorder.start(1000);
-        isRecording = true;
-        recordingStartTime = Date.now();
-
-        const panel = document.getElementById("recordingPanel");
-        const btn = document.getElementById("recBtn");
-        const badge = document.getElementById("recBadge");
-        const timer = document.getElementById("recTimer");
-        if(panel) panel.classList.add("recording-active");
-        if(btn) { btn.classList.remove("rec-btn-start"); btn.classList.add("rec-btn-stop"); btn.textContent = "⏹️ Stop Rekam"; }
-        if(badge) badge.style.display = "inline";
-        if(timer) timer.style.display = "block";
-        setRecordingStatus("Merekam... upload dilakukan otomatis saat Stop.");
-
-        if(recordingTimerInterval) clearInterval(recordingTimerInterval);
-        recordingTimerInterval = setInterval(() => {
-            const elapsed = Math.min(Date.now() - recordingStartTime, RECORDING_UI_MAX_DURATION_MS);
-            recordingDurationMs = elapsed;
-            const el = document.getElementById("recTimer");
-            if(el) el.textContent = formatDuration(Math.floor(elapsed / 1000));
-        }, 250);
-
-        if(recordingAutoStopTimer) clearTimeout(recordingAutoStopTimer);
-        recordingAutoStopTimer = setTimeout(() => {
-            if(isRecording) {
-                setRecordingStatus("Batas 5 menit tercapai. Menghentikan recording...", "error");
-                stopRecording();
-            }
-        }, RECORDING_UI_MAX_DURATION_MS);
-
-        toast("🔴 Recording dimulai!", "merah");
+        recordLocalRecorder.start(1000);
+        recordLocalActive = true;
+        localRecordingClientId = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
+        recordStartTime = Date.now();
+        updateRecordingUI("local");
+        startRecordingTimer();
+        toast("🎙️ REC LOCAL dimulai.", "biru");
     } catch(e) {
-        console.error("[RECORDING] Start error:", e);
-        toast("Gagal memulai recording: " + e.message, "merah");
-        stopRecordingUI();
+        console.error("[REC LOCAL] start:", e);
+        toast("Gagal memulai REC LOCAL: " + e.message, "merah");
+        cleanupRecordLocal();
     }
 }
 
-function stopRecording() {
-    if(!isRecording && (!mediaRecorder || mediaRecorder.state === 'inactive')) return;
-    recordingDurationMs = Math.min(Date.now() - recordingStartTime, RECORDING_UI_MAX_DURATION_MS);
-    if(mediaRecorder && mediaRecorder.state !== 'inactive') {
-        try { mediaRecorder.stop(); } catch(e) { console.warn("[RECORDING] stop error:", e); }
+function stopRecordLocal() {
+    if(recordLocalRecorder && recordLocalRecorder.state !== "inactive") {
+        recordLocalRecorder.stop();
+    } else {
+        cleanupRecordLocal();
     }
-    stopRecordingUI();
 }
 
-function stopRecordingUI() {
-    isRecording = false;
-    if(recordingTimerInterval) { clearInterval(recordingTimerInterval); recordingTimerInterval = null; }
-    if(recordingAutoStopTimer) { clearTimeout(recordingAutoStopTimer); recordingAutoStopTimer = null; }
+async function uploadRecordLocal() {
+    const durationMs = Math.min(REC_MAX_DURATION_MS, Date.now() - recordStartTime);
+    const mimeType = recordLocalRecorder?.mimeType || "audio/webm";
+    const blob = new Blob(recordLocalChunks, { type:mimeType });
 
-    const panel = document.getElementById("recordingPanel");
-    const btn = document.getElementById("recBtn");
-    const badge = document.getElementById("recBadge");
-    const timer = document.getElementById("recTimer");
-    if(panel) panel.classList.remove("recording-active");
-    if(btn) { btn.classList.remove("rec-btn-stop"); btn.classList.add("rec-btn-start"); btn.textContent = "🔴 Mulai Rekam"; }
-    if(badge) badge.style.display = "none";
-    if(timer) { timer.style.display = "none"; timer.textContent = "00:00"; }
+    cleanupRecordLocal();
 
-    if(mixedStream) {
-        try { mixedStream.getTracks().forEach(t => t.stop()); } catch(_) {}
-        mixedStream = null;
+    if(blob.size === 0) {
+        toast("Tidak ada audio terekam.", "kuning");
+        return;
     }
-    destinationNode = null;
-}
-
-function makeRecordingClientId() {
-    if(window.crypto?.randomUUID) return window.crypto.randomUUID();
-    return `rec-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-}
-
-async function saveRecordingToBackend() {
-    if(recordedChunks.length === 0) {
-        setRecordingStatus("Tidak ada data terekam.", "error");
+    if(blob.size > REC_MAX_SIZE_BYTES) {
+        toast("REC LOCAL melebihi batas 25 MB.", "merah");
         return;
     }
 
-    const blob = new Blob(recordedChunks, { type: recordingMimeType || 'audio/webm' });
-    const durationMs = Math.max(1, Math.min(Math.round(recordingDurationMs || (Date.now() - recordingStartTime)), RECORDING_UI_MAX_DURATION_MS));
-
-    if(blob.size > RECORDING_UI_MAX_SIZE_BYTES) {
-        recordedChunks = [];
-        recordingBytes = 0;
-        toast("Recording melebihi batas 25 MB dan tidak diupload.", "merah", 6000);
-        setRecordingStatus("Gagal: ukuran > 25 MB.", "error");
-        return;
-    }
-    if(durationMs > RECORDING_UI_MAX_DURATION_MS) {
-        toast("Recording melebihi batas 5 menit.", "merah", 6000);
-        setRecordingStatus("Gagal: durasi > 5 menit.", "error");
-        return;
-    }
-
-    const groupName = grupAktif;
-    const channelName = channelAktif;
-    const clientUploadId = makeRecordingClientId();
-
-    setRecordingStatus(`Mengupload ${(blob.size / 1024 / 1024).toFixed(2)} MB...`);
     try {
-        const data = await apiRequest('/api/recordings/upload', {
-            method: 'POST',
-            headers: {
-                'Content-Type': recordingMimeType || 'audio/webm',
-                'X-Client-Upload-Id': clientUploadId,
-                'X-Group-Name': groupName,
-                'X-Channel-Name': channelName,
-                'X-Duration-Ms': String(durationMs)
-            },
+        const response = await fetch(`${REALTIME_SERVER_URL}/api/recordings/upload`, {
+            method: "POST",
+            headers: recordingAuthHeaders({
+                "Content-Type": mimeType || "audio/webm",
+                "X-Client-Upload-Id": localRecordingClientId || (crypto.randomUUID ? crypto.randomUUID() : String(Date.now())),
+                "X-Group-Name": grupAktif,
+                "X-Channel-Name": channelAktif,
+                "X-Duration-Ms": String(Math.floor(durationMs))
+            }),
             body: blob
         });
+        const data = await response.json().catch(() => null);
+        if(!response.ok || !data?.ok) throw new Error(data?.message || `HTTP ${response.status}`);
 
-        const item = data?.recording;
-        if(item) {
-            upsertServerRecording(item);
-            renderRecList();
-        }
-        recordedChunks = [];
-        recordingBytes = 0;
-        setRecordingStatus(`Tersimpan di server • ${formatDuration(Math.floor(durationMs / 1000))}`, "success");
-        toast(`⏹️ Recording tersimpan (${formatDuration(Math.floor(durationMs / 1000))})`, "hijau");
+        toast("🎙️ Voice note tersimpan dan tersedia di channel aktif.", "hijau");
+        await renderRecordingList();
     } catch(e) {
-        console.error("[RECORDING] Upload gagal:", e);
-        setRecordingStatus(`Upload gagal: ${e.message}`, "error");
-        toast(`❌ Upload recording gagal: ${e.message}`, "merah", 7000);
+        console.error("[REC LOCAL] upload:", e);
+        toast("Upload REC LOCAL gagal: " + e.message, "merah");
     }
 }
 
-function upsertServerRecording(item) {
-    if(!item?.id) return;
-    serverRecordings = [item, ...serverRecordings.filter(r => String(r.id) !== String(item.id))];
+function cleanupRecordLocal() {
+    recordLocalActive = false;
+    stopRecordingTimer();
+    if(recordLocalRecorder) {
+        recordLocalRecorder.ondataavailable = null;
+        recordLocalRecorder = null;
+    }
+    recordLocalChunks = [];
+    localRecordingClientId = null;
+    updateRecordingUI(recordChannelActive ? "channel" : "");
 }
 
-async function loadRecordingsForActiveChannel() {
+async function renderRecordingList() {
     const container = document.getElementById("recList");
-    if(!container || !grupAktif || !channelAktif || !userToken) return;
-    updateRecordingContext();
-    container.innerHTML = '<div style="text-align:center;color:var(--muted);font-size:12px;padding:8px;">Memuat recording...</div>';
+    if(!container || !grupAktif || !channelAktif) return;
+
+    const localRows = await listChannelRecordingsLocal();
+    let serverRows = [];
+
     try {
-        const params = `?group=${encodeURIComponent(grupAktif)}&channel=${encodeURIComponent(channelAktif)}`;
-        const data = await apiRequest(`/api/recordings${params}`, { method:'GET' });
-        serverRecordings = Array.isArray(data?.recordings) ? data.recordings : [];
-        renderRecList();
+        const r = await fetch(
+            `${REALTIME_SERVER_URL}/api/recordings?group=${encodeURIComponent(grupAktif)}&channel=${encodeURIComponent(channelAktif)}&limit=50`,
+            { headers: recordingAuthHeaders(), cache:"no-store" }
+        );
+        const data = await r.json().catch(() => null);
+        if(r.ok && data?.ok) serverRows = data.recordings || [];
     } catch(e) {
-        serverRecordings = [];
-        container.innerHTML = `<div style="text-align:center;color:#fca5a5;font-size:12px;padding:8px;">❌ ${escapeHtml(e.message)}</div>`;
-        console.warn("[RECORDING] Load gagal:", e);
+        console.warn("[REC LOCAL] List failed:", e?.message || e);
     }
-}
 
-function formatDuration(sec) {
-    const total = Math.max(0, Number(sec) || 0);
-    const h = Math.floor(total / 3600);
-    const m = Math.floor((total % 3600) / 60);
-    const s = total % 60;
-    if(h > 0) return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
-    return `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
-}
+    const rows = [
+        ...localRows.map(r => ({...r, _type:"channel-local"})),
+        ...serverRows.map(r => ({...r, _type:"local-server"}))
+    ].sort((a,b) => (b.createdAt || b.created_at || 0) - (a.createdAt || a.created_at || 0));
 
-function escapeHtml(value) {
-    return String(value ?? '').replace(/[&<>'"]/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[ch]));
-}
-
-function renderRecList() {
-    const container = document.getElementById("recList");
-    if(!container) return;
-    updateRecordingContext();
-
-    const recordings = serverRecordings.filter(r => r.group === grupAktif && r.channel === channelAktif);
-    if(recordings.length === 0) {
+    if(!rows.length) {
         container.innerHTML = '<div style="text-align:center;color:var(--muted);font-size:12px;padding:8px;">Belum ada recording di channel ini</div>';
         return;
     }
 
-    container.innerHTML = recordings.slice(0, 50).map(r => {
-        const own = userIdSaya && Number(r.senderId) === Number(userIdSaya);
-        const sizeMb = (Number(r.sizeBytes || 0) / 1024 / 1024).toFixed(2);
-        const created = r.createdAt ? new Date(r.createdAt).toLocaleString('id-ID') : '-';
-        const sender = own ? 'Anda' : `User #${escapeHtml(r.senderId ?? '-')}`;
-        return `<div class="rec-item">
-            <div style="min-width:0;flex:1;">
-                <div class="rec-item-name">🎙️ ${sender}</div>
-                <div class="rec-item-meta">${created} • ${formatDuration(Math.round(Number(r.durationMs || 0)/1000))} • ${sizeMb} MB</div>
-            </div>
-            <div class="rec-item-actions">
-                <button class="btn btn-sm" onclick="playRecording('${String(r.id).replace(/'/g,"\\'")}')">▶️</button>
-                ${own ? `<button class="btn btn-sm btn-merah" onclick="deleteRecording('${String(r.id).replace(/'/g,"\\'")}')">🗑️</button>` : ''}
-            </div>
-        </div>`;
-    }).join('');
+    container.innerHTML = rows.slice(0,20).map(r => {
+        const id = String(r.id);
+        const duration = Math.floor((r.durationMs || r.duration_ms || 0) / 1000);
+        const size = Number(r.sizeBytes || r.size_bytes || 0);
+        const mine = r._type === "local-server" && String(r.senderId) === String(getCurrentUserIdSafe());
+        const label = r._type === "channel-local" ? "🔴 CHANNEL" : "🎙️ LOCAL";
+        const when = r.createdAt || r.created_at || r.date || "";
+        return `
+            <div class="rec-item">
+                <div>
+                    <div class="rec-item-name">${label}</div>
+                    <div class="rec-item-meta">${formatDuration(duration)} • ${(size/1024).toFixed(1)} KB • ${escapeHtml(String(when))}</div>
+                </div>
+                <div class="rec-item-actions">
+                    <button class="btn btn-sm" onclick="playRecordingV1('${escapeJs(id)}','${r._type}')">▶️</button>
+                    ${r._type === "channel-local"
+                        ? `<button class="btn btn-sm btn-merah" onclick="deleteRecordingV1('${escapeJs(id)}','channel-local')">🗑️</button>`
+                        : (mine ? `<button class="btn btn-sm btn-merah" onclick="deleteRecordingV1('${escapeJs(id)}','local-server')">🗑️</button>` : "")}
+                </div>
+            </div>`;
+    }).join("");
 }
 
-async function playRecording(id) {
-    const rec = serverRecordings.find(r => String(r.id) === String(id));
-    if(!rec) {
-        toast("Recording tidak ditemukan.", "merah");
-        return;
-    }
+function getCurrentUserIdSafe() {
     try {
-        const data = await apiRequest(`/api/recordings/${encodeURIComponent(id)}/url`, { method:'GET' });
-        if(!data?.signedUrl) throw new Error("Signed URL tidak tersedia.");
-        const audio = new Audio(data.signedUrl);
-        audio.preload = 'auto';
+        const raw = sessionStorage.getItem("kgUser");
+        if(raw) return JSON.parse(raw)?.id || "";
+    } catch(_) {}
+    return "";
+}
+
+function escapeHtml(v) {
+    return String(v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function escapeJs(v) {
+    return String(v).replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+}
+
+async function playRecordingV1(id, type) {
+    try {
+        if(type === "channel-local") {
+            const rows = await listChannelRecordingsLocal();
+            const row = rows.find(r => r.id === id);
+            if(!row?.blob) throw new Error("Recording lokal tidak ditemukan.");
+            const url = URL.createObjectURL(row.blob);
+            const audio = new Audio(url);
+            audio.onended = () => URL.revokeObjectURL(url);
+            await audio.play();
+            return;
+        }
+
+        const r = await fetch(`${REALTIME_SERVER_URL}/api/recordings/${encodeURIComponent(id)}/url`, {
+            headers: recordingAuthHeaders(), cache:"no-store"
+        });
+        const data = await r.json().catch(() => null);
+        if(!r.ok || !data?.ok || !data.url) throw new Error(data?.message || "URL recording tidak tersedia.");
+        const audio = new Audio(data.url);
         await audio.play();
-        toast("▶️ Memutar recording...", "hijau");
     } catch(e) {
-        console.error("[RECORDING] Play gagal:", e);
-        toast(`❌ Gagal memutar: ${e.message}`, "merah", 6000);
+        console.error("[RECORDING] PLAY:", e);
+        toast("Gagal memutar recording: " + e.message, "merah");
     }
 }
 
-async function deleteRecording(id) {
-    const rec = serverRecordings.find(r => String(r.id) === String(id));
-    if(!rec) return;
-    if(!userIdSaya || Number(rec.senderId) !== Number(userIdSaya)) {
-        toast("Anda hanya dapat menghapus recording milik sendiri.", "merah");
-        return;
-    }
+async function deleteRecordingV1(id, type) {
     if(!confirm("Yakin hapus recording ini?")) return;
     try {
-        await apiRequest(`/api/recordings/${encodeURIComponent(id)}`, { method:'DELETE' });
-        serverRecordings = serverRecordings.filter(r => String(r.id) !== String(id));
-        renderRecList();
-        toast("Recording dihapus.", "kuning");
+        if(type === "channel-local") {
+            await deleteChannelRecordingLocal(id);
+            toast("REC CHANNEL dihapus dari perangkat.", "kuning");
+        } else {
+            const r = await fetch(`${REALTIME_SERVER_URL}/api/recordings/${encodeURIComponent(id)}`, {
+                method:"DELETE",
+                headers:recordingAuthHeaders()
+            });
+            const data = await r.json().catch(() => null);
+            if(!r.ok || !data?.ok) throw new Error(data?.message || "Gagal menghapus.");
+            toast("REC LOCAL dihapus.", "kuning");
+        }
+        await renderRecordingList();
     } catch(e) {
-        toast(`❌ Gagal menghapus recording: ${e.message}`, "merah", 6000);
+        console.error("[RECORDING] DELETE:", e);
+        toast("Gagal menghapus recording: " + e.message, "merah");
     }
 }
 
+function stopAllRecordings() {
+    if(recordChannelActive) stopRecordChannel();
+    if(recordLocalActive) stopRecordLocal();
+}
+
+function startRecordingListRefresh() {
+    if(recordingListInterval) clearInterval(recordingListInterval);
+    renderRecordingList();
+    recordingListInterval = setInterval(() => {
+        if(document.getElementById("halamanObrolan")?.classList.contains("aktif")) {
+            renderRecordingList();
+        }
+    }, 5000);
+}
+
+function stopRecordingListRefresh() {
+    if(recordingListInterval) {
+        clearInterval(recordingListInterval);
+        recordingListInterval = null;
+    }
+}
+
+// Keep new incoming streams attached to REC CHANNEL without touching WebRTC.
+function attachRecordingToExistingRemoteAudio(audioEl) {
+    if(audioEl?.srcObject) addIncomingRecordingSource(audioEl.srcObject);
+}
 
 function updateNetworkSpeed() {
     const el = document.getElementById("networkSpeed");
@@ -3076,8 +3259,6 @@ async function masukChannel(namaGrup, namaChannel) {
                 method:'GET'
             });
             userData = dataUser.user || dataUser.profile || null;
-            userIdSaya = Number(userData?.id || 0) || userIdSaya;
-            if(userIdSaya) sessionStorage.setItem("kgUserId", String(userIdSaya));
         } catch(err) {
             console.error('[CHANNEL] Gagal memverifikasi user PostgreSQL:', err);
             return toast(`❌ Gagal memverifikasi user: ${err.message}`, "merah");
@@ -3135,9 +3316,7 @@ async function masukChannel(namaGrup, namaChannel) {
 
     document.getElementById("namaChannelAktif").textContent = `${namaGrup} / ${namaChannel}`;
     resetFloorState();
-    serverRecordings = [];
-    updateRecordingContext();
-    renderRecList();
+    renderRecordingList();
     document.getElementById("idSaya").textContent = "";
     document.getElementById("jumlahPengguna").textContent = "";
     document.getElementById("infoChannel").textContent = c.muted ? "🔇 Channel ini sedang muted (suara dimatikan)" : "";
@@ -3373,12 +3552,14 @@ function perbaruiDaftarPengguna() {
 }
 
 function keluarChannel() {
+    stopRecordingListRefresh();
+    stopAllRecordings();
     try {
         // Release floor if talking or waiting
         if(myFloorStatus === 'talking' || myFloorStatus === 'waiting') {
             try { pttUp(); } catch(e) { console.log("pttUp error:", e); }
         }
-        if(isRecording) { try { stopRecording(); } catch(e) { console.log("stopRecording error:", e); } }
+        if(isRecording) { try { stopAllRecordings(); } catch(e) { console.log("stopRecording error:", e); } }
 
         // Hentikan semua timer dan interval dulu
         stopPttTimeout();
@@ -3422,7 +3603,6 @@ function keluarChannel() {
         const ch = channelAktif;
         channelAktif = "";
         grupAktif = "";
-        serverRecordings = [];
         if(ch) catatLog("KELUAR", ch);
 
         // Pindah halaman
@@ -3499,13 +3679,8 @@ function pasangSuara(panggilan) {
         };
         tryPlayRemote();
 
-        // If recording is active, connect this incoming stream to the mixer
-        if(isRecording && audioContext && destinationNode) {
-            try {
-                const sourceIn = audioContext.createMediaStreamSource(suaraOrang);
-                sourceIn.connect(destinationNode);
-            } catch(e) { console.log("Failed to connect incoming stream to recorder", e); }
-        }
+        // REC CHANNEL only: capture incoming channel audio. WebRTC call is unchanged.
+        addIncomingRecordingSource(suaraOrang);
     });
 }
 
