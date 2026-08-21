@@ -141,6 +141,7 @@ app.use((req, res, next) => {
 const LOGIN_MAX_ATTEMPTS = Math.max(1, Number(process.env.LOGIN_MAX_ATTEMPTS || 8));
 const LOGIN_WINDOW_MS = Math.max(1000, Number(process.env.LOGIN_WINDOW_MS || 10 * 60 * 1000));
 const loginAttempts = new Map();
+const ADMIN_ROOM = 'admins';
 const KICK_DURATION_MS = Math.max(1000, Number(process.env.ADMIN_KICK_DURATION_MS || 5 * 60 * 1000));
 const STALE_SESSION_MS = Math.max(15000, Number(process.env.STALE_SESSION_MS || 65000));
 function loginRateKey(req, scope) { return `${scope}:${req.ip || 'unknown'}`; }
@@ -234,7 +235,8 @@ async function auditAdmin(adminSession, action, target='', detail='') {
   try {
     const r=await db.query(`INSERT INTO audit_logs(admin_name,action,target,detail) VALUES($1,$2,$3,$4) RETURNING id,admin_name,action,target,detail,created_at`,[name,action,target,detail]);
     const row=r.rows[0];
-    if(row) io.emit('audit:new',{id:row.id,adminName:row.admin_name,action:row.action,target:row.target,detail:row.detail,createdAt:row.created_at});
+    // Audit hanya untuk socket admin, bukan semua user.
+    if(row) io.to(ADMIN_ROOM).emit('audit:new',{id:row.id,adminName:row.admin_name,action:row.action,target:row.target,detail:row.detail,createdAt:row.created_at});
   } catch(e) {
     console.error('[AUDIT] WRITE ERROR:',e.message);
   }
@@ -1212,6 +1214,7 @@ io.on('connection',socket=>{
   if(socketUser){
     socket.emit('auth:ready',{ok:true,user:publicUser(socketUser)});
   }
+  if(socketAdmin) socket.join(ADMIN_ROOM);
   console.log('[SOCKET] Connected:',socket.id); socket.emit('server:ready',{version:SERVER_VERSION,transport:socket.conn.transport.name});
   socket.on('room:join',async payload=>{try{
     const group=String(payload?.group||'').trim(),channel=String(payload?.channel||'').trim(),peerId=String(payload?.peerId||'').trim(),maxUsers=Number(payload?.maxUsers||0);

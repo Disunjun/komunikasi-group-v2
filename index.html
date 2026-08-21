@@ -2405,17 +2405,7 @@ function initRealtimeSocket() {
         try { if(adminTabAktif === 'channels') renderChannels(); } catch(_) {}
         try { muatDaftarGrup(); } catch(_) {}
     });
-    socket.on("audit:new", log => {
-        try {
-            const item = normalizeServerAudit(log);
-            serverAuditLogs = [item, ...serverAuditLogs.filter(x => String(x.id) !== String(item.id))].slice(0,500);
-            if(adminTabAktif === 'audit') renderAudit();
-            scheduleAdminRealtimeSync("audit:new");
-            console.log("[AUDIT] Realtime PostgreSQL log diterima:", item.aksi);
-        } catch(err) {
-            console.warn("[AUDIT] Realtime parse gagal:", err);
-        }
-    });
+    // Event audit:new hanya dikirim server ke socket admin (lihat initAdminRealtimeSocket).
     socket.on("presence:update", sessions => {
         serverSessions = normalizeServerSessions(sessions);
         const counts = {};
