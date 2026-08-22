@@ -435,7 +435,7 @@ color:#cbd5e1;
 <base target="_blank">
 </head>
 <body>
-<div class="theme-toggle" id="themeToggle" onclick="toggleTheme()" title="Ganti Tema"></div>
+<div class="theme-toggle" id="themeToggle" onclick="toggleTheme()" title="Ganti Tema">🌙</div>
 <div class="container">
 <h1>📢 Sistem Komunikasi Grup</h1>
 <!-- ========== HALAMAN MASUK ========== -->
@@ -448,7 +448,7 @@ color:#cbd5e1;
 <div class="petunjuk">Data tersimpan aman di perangkat Anda</div>
 </div>
 <div class="kotak">
-<h2> Masuk ke Sistem</h2>
+<h2>🔐 Masuk ke Sistem</h2>
 <input type="text" id="loginNama" placeholder="Nama Lengkap">
 <input type="password" id="loginPass" placeholder="Kata Sandi">
 <button class="btn" onclick="masukSistem()">Masuk</button>
@@ -486,11 +486,11 @@ color:#cbd5e1;
 </div>
 <!-- Tabs -->
 <div class="tabs">
-<button class="tab tab-aktif" onclick="pilihTab('users')" id="tab-users"> Users</button>
+<button class="tab tab-aktif" onclick="pilihTab('users')" id="tab-users">👥 Users</button>
 <button class="tab" onclick="pilihTab('groups')" id="tab-groups">📁 Groups</button>
 <button class="tab" onclick="pilihTab('channels')" id="tab-channels">🔊 Channels</button>
 <button class="tab" onclick="pilihTab('monitoring')" id="tab-monitoring">📡 Monitoring</button>
-<button class="tab" onclick="pilihTab('audit')" id="tab-audit"> Audit Log</button>
+<button class="tab" onclick="pilihTab('audit')" id="tab-audit">📋 Audit Log</button>
 <button class="tab" onclick="pilihTab('statistik')" id="tab-statistik">📊 Statistik</button>
 </div>
 <!-- Tab Users -->
@@ -563,7 +563,7 @@ color:#cbd5e1;
 <!-- Tab Monitoring -->
 <div id="content-monitoring" class="tab-content">
 <div class="toolbar">
-<h3> Monitoring Online Users</h3>
+<h3>📡 Monitoring Online Users</h3>
 <div>
 <button class="btn" onclick="refreshMonitoring()">🔄 Refresh</button>
 <button class="btn btn-kuning" onclick="bersihkanSession()">🧹 Bersihkan Session</button>
@@ -582,11 +582,11 @@ Auto-refresh setiap 5 detik. 🎙️ = sedang bicara | 🔒 = channel terkunci |
 <!-- Tab Audit Log -->
 <div id="content-audit" class="tab-content">
 <div class="toolbar">
-<h3>📋 Audit Log Admin</h3>
+<h3> Audit Log Admin</h3>
 <div>
 <button class="btn" onclick="renderAudit()">🔄 Refresh</button>
 <button class="btn btn-ungu" onclick="eksporLogAdmin()">📤 Ekspor Log</button>
-<button class="btn btn-merah" onclick="bersihkanAudit()">🗑️ Bersihkan Log</button>
+<button class="btn btn-merah" onclick="bersihkanAudit()">️ Bersihkan Log</button>
 </div>
 </div>
 <div style="overflow-x:auto;">
@@ -624,7 +624,7 @@ Menyimpan maksimal 500 catatan. Semua aksi admin tercatat otomatis.
 </div>
 </div>
 <div class="chart-container">
-<div class="chart-title"> Aktivitas per Bulan (12 Bulan Terakhir)</div>
+<div class="chart-title">📈 Aktivitas per Bulan (12 Bulan Terakhir)</div>
 <canvas id="chartBulan" class="chart-canvas" height="220"></canvas>
 </div>
 </div>
@@ -638,7 +638,7 @@ Menyimpan maksimal 500 catatan. Semua aksi admin tercatat otomatis.
 <button class="btn btn-merah" onclick="keluarSistem()">🚪 Keluar Akun</button>
 </div>
 <!-- FITUR BARU: Tombol Arsip Pribadi -->
-<button class="btn btn-ungu" onclick="bukaHalamanArsip()" style="margin-bottom:15px; width:100%;"> Buka Arsip Pribadi (Rekaman Lokal)</button>
+<button class="btn btn-ungu" onclick="bukaHalamanArsip()" style="margin-bottom:15px; width:100%;">📂 Buka Arsip Pribadi (Rekaman Lokal)</button>
 <div id="daftarGrupTampil"></div>
 </div>
 </div>
@@ -647,7 +647,7 @@ Menyimpan maksimal 500 catatan. Semua aksi admin tercatat otomatis.
 <div class="kotak">
 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
 <h2>📁 Arsip Pribadi Channel</h2>
-<button class="btn btn-abu" onclick="tampilHalaman('halamanDaftar')">⬅️ Kembali</button>
+<button class="btn btn-abu" onclick="tampilHalaman('halamanDaftar')">️ Kembali</button>
 </div>
 <p class="petunjuk" style="margin-bottom:15px;">Rekaman tersimpan aman di perangkat Anda (Offline). Data tidak diunggah ke server. Anda dapat mengunduhnya kapan saja.</p>
 <div id="arsipListContainer" style="margin-top:15px;">Memuat arsip...</div>
@@ -711,7 +711,7 @@ ontouchstart="pttDown(event)" ontouchend="pttUp(event)"
 </div>
 <h4>Pengguna Terhubung</h4>
 <div class="user-list" id="daftarPengguna"></div>
-<h4> Log Masuk Channel</h4>
+<h4>📜 Log Masuk Channel</h4>
 <div class="log-area" id="daftarLog"></div>
 </div>
 <div class="chat-area">
@@ -762,7 +762,7 @@ ontouchstart="pttDown(event)" ontouchend="pttUp(event)"
 <!-- Modal Reset Password -->
 <div class="modal-overlay" id="modalResetPass">
 <div class="modal">
-<h3> Reset Password</h3>
+<h3>🔑 Reset Password</h3>
 <input type="text" id="resetPassNama" readonly style="background:#334155;">
 <input type="password" id="resetPassBaru" placeholder="Password Baru">
 <div class="modal-footer">
@@ -879,6 +879,7 @@ let recordTimerInterval = null;
 let recordChannelContext = null;
 let recordChannelDestination = null;
 let recordChannelSources = new Map();
+const connectedAudioElements = new WeakSet(); // Track audio elements connected to recorder
 let recordingListInterval = null;
 let localRecordingClientId = null;
 let adminTabAktif = 'users';
@@ -1318,29 +1319,18 @@ setTimeout(() => playBeep(1500, 0.12, 'sine', 0.15), 100);
 function eksporLogAdmin() {
 const audit = [...serverAuditLogs];
 if(audit.length === 0) return toast("Belum ada catatan audit!", "kuning");
-let isiTeks = `==================================================
-`;
-isiTeks += `        CATATAN LOG AUDIT ADMIN
-`;
-isiTeks += `Waktu Ekspor: ${new Date().toLocaleString('id-ID')}
-`;
-isiTeks += `==================================================
-`;
+let isiTeks = `==================================================\n`;
+isiTeks += `        CATATAN LOG AUDIT ADMIN\n`;
+isiTeks += `Waktu Ekspor: ${new Date().toLocaleString('id-ID')}\n`;
+isiTeks += `==================================================\n`;
 audit.reverse().forEach(a => {
-isiTeks += `Tanggal : ${a.tgl}
-`;
-isiTeks += `Jam     : ${a.jam}
-`;
-isiTeks += `Admin   : ${a.admin}
-`;
-isiTeks += `Aksi    : ${a.aksi}
-`;
-isiTeks += `Target  : ${a.target}
-`;
-isiTeks += `Detail  : ${a.detail || '-'}
-`;
-isiTeks += `----------------------------------------
-`;
+isiTeks += `Tanggal : ${a.tgl}\n`;
+isiTeks += `Jam     : ${a.jam}\n`;
+isiTeks += `Admin   : ${a.admin}\n`;
+isiTeks += `Aksi    : ${a.aksi}\n`;
+isiTeks += `Target  : ${a.target}\n`;
+isiTeks += `Detail  : ${a.detail || '-'}\n`;
+isiTeks += `----------------------------------------\n`;
 });
 const berkas = new Blob([isiTeks], {type:'text/plain'});
 const tautan = document.createElement("a");
@@ -1353,27 +1343,17 @@ toast("Audit log berhasil diekspor!", "hijau");
 function eksporLog() {
 const logChannel = ambilData("logAktivitas").filter(l => l.channel === channelAktif);
 if(logChannel.length === 0) return toast("Belum ada catatan log untuk channel ini!", "kuning");
-let isiTeks = `==================================================
-`;
-isiTeks += `        CATATAN LOG AKTIVITAS CHANNEL
-`;
-isiTeks += `Nama Channel: ${channelAktif}
-`;
-isiTeks += `Waktu Ekspor: ${new Date().toLocaleString('id-ID')}
-`;
-isiTeks += `==================================================
-`;
+let isiTeks = `==================================================\n`;
+isiTeks += `        CATATAN LOG AKTIVITAS CHANNEL\n`;
+isiTeks += `Nama Channel: ${channelAktif}\n`;
+isiTeks += `Waktu Ekspor: ${new Date().toLocaleString('id-ID')}\n`;
+isiTeks += `==================================================\n`;
 logChannel.reverse().forEach(l => {
-isiTeks += `Tanggal : ${l.tgl}
-`;
-isiTeks += `Jam     : ${l.jam}
-`;
-isiTeks += `Nama    : ${l.nama}
-`;
-isiTeks += `Status  : ${l.aksi} Channel
-`;
-isiTeks += `----------------------------------------
-`;
+isiTeks += `Tanggal : ${l.tgl}\n`;
+isiTeks += `Jam     : ${l.jam}\n`;
+isiTeks += `Nama    : ${l.nama}\n`;
+isiTeks += `Status  : ${l.aksi} Channel\n`;
+isiTeks += `----------------------------------------\n`;
 });
 const berkas = new Blob([isiTeks], {type:'text/plain'});
 const tautan = document.createElement("a");
@@ -1740,7 +1720,7 @@ return;
 }
 const audit = serverAuditLogs;
 if(audit.length === 0) {
-tbody.innerHTML = `<tr><td colspan="5" class="empty-state"><div class="empty-state-icon"></div>Belum ada catatan audit di PostgreSQL</td></tr>`;
+tbody.innerHTML = `<tr><td colspan="5" class="empty-state"><div class="empty-state-icon">📋</div>Belum ada catatan audit di PostgreSQL</td></tr>`;
 return;
 }
 tbody.innerHTML = audit.map(a => {
@@ -1857,7 +1837,7 @@ function renderGroups() {
 const tbody = document.getElementById("tabelGroups");
 const grup = ambilData("daftarGrup");
 if(grup.length === 0) {
-tbody.innerHTML = `<tr><td colspan="4" class="empty-state"><div class="empty-state-icon"></div>Belum ada grup</td></tr>`;
+tbody.innerHTML = `<tr><td colspan="4" class="empty-state"><div class="empty-state-icon">📁</div>Belum ada grup</td></tr>`;
 return;
 }
 tbody.innerHTML = grup.map((g, i) => {
@@ -1945,7 +1925,7 @@ let rows = [];
 grup.forEach((g, gi) => {
 g.channel.forEach((c, ci) => {
 const statusBadge = c.status === "aktif" ? '<span class="badge badge-aktif">AKTIF</span>' : '<span class="badge badge-nonaktif">NONAKTIF</span>';
-const lockedBadge = c.locked ? '<span class="badge badge-locked">🔒 LOCKED</span>' : '<span class="badge badge-aktif">-</span>';
+const lockedBadge = c.locked ? '<span class="badge badge-locked"> LOCKED</span>' : '<span class="badge badge-aktif">-</span>';
 const mutedBadge = c.muted ? '<span class="badge badge-muted">🔇 MUTED</span>' : '<span class="badge badge-aktif">-</span>';
 // Prefix hint untuk admin (kecil, abu-abu)
 let prefixHint = '';
@@ -1954,8 +1934,8 @@ prefixHint = `<span style="color:#64748b;font-size:11px;">(prefix: ${c.prefix})<
 } else if(g.prefix) {
 prefixHint = `<span style="color:#64748b;font-size:11px;">(inherit: ${g.prefix})</span>`;
 }
-const maxUsersBadge = c.maxUsers && c.maxUsers > 0 ? `<span class="badge badge-maxuser">${c.maxUsers}</span>` : '<span style="color:#64748b;font-size:12px;">∞</span>';
-const timeoutBadge = c.pttTimeout && c.pttTimeout > 0 ? `<span class="badge badge-kuning">${c.pttTimeout}s</span>` : '<span style="color:#64748b;font-size:12px;">∞</span>';
+const maxUsersBadge = c.maxUsers && c.maxUsers > 0 ? `<span class="badge badge-maxuser">${c.maxUsers}</span>` : '<span style="color:#64748b;font-size:12px;"></span>';
+const timeoutBadge = c.pttTimeout && c.pttTimeout > 0 ? `<span class="badge badge-kuning">${c.pttTimeout}s</span>` : '<span style="color:#64748b;font-size:12px;"></span>';
 rows.push(`<tr>
 <td><b>${g.nama}</b></td>
 <td>${c.nama} ${prefixHint}</td>
@@ -1994,7 +1974,7 @@ const grup = ambilData("daftarGrup");
 if(grup[gi].channel.some(c => c.nama.toLowerCase() === nama.toLowerCase())) return toast("Channel sudah ada di grup ini!", "merah");
 grup[gi].channel.push({ nama, prefix, maxUsers, pttTimeout, status: "aktif", locked: false, muted: false });
 simpanData("daftarGrup", grup);
-catatAudit("BUAT CHANNEL", `${grup[gi].nama} / ${nama}`, `prefix=${prefix||'-'}, maxUsers=${maxUsers||''}, timeout=${pttTimeout||'∞'}`);
+catatAudit("BUAT CHANNEL", `${grup[gi].nama} / ${nama}`, `prefix=${prefix||'-'}, maxUsers=${maxUsers||'∞'}, timeout=${pttTimeout||'∞'}`);
 tutupModal('modalBuatChannel');
 renderChannels();
 toast(`Channel "${nama}" berhasil dibuat!`, "hijau");
@@ -2024,7 +2004,7 @@ grup[grupIdx].channel[chIdx].prefix = prefixBaru;
 grup[grupIdx].channel[chIdx].maxUsers = maxUsersBaru;
 grup[grupIdx].channel[chIdx].pttTimeout = pttTimeoutBaru;
 simpanData("daftarGrup", grup);
-catatAudit("EDIT CHANNEL", `${grup[grupIdx].nama} / ${lama}`, `nama=${baru}, prefix=${prefixBaru||'-'}, maxUsers=${maxUsersBaru||'∞'}, timeout=${pttTimeoutBaru||'∞'}`);
+catatAudit("EDIT CHANNEL", `${grup[grupIdx].nama} / ${lama}`, `nama=${baru}, prefix=${prefixBaru||'-'}, maxUsers=${maxUsersBaru||''}, timeout=${pttTimeoutBaru||''}`);
 tutupModal('modalRenameChannel');
 renderChannels();
 toast("Channel berhasil diperbarui!", "hijau");
@@ -2214,7 +2194,7 @@ function initRealtimeSocket() {
 if(socket) { try { socket.disconnect(); } catch(e) {} }
 if(!REALTIME_SERVER_URL || REALTIME_SERVER_URL.includes("YOUR-BACKEND")) {
 document.getElementById("statusKoneksi").className = "status status-merah";
-document.getElementById("statusKoneksi").innerHTML = "❌ <b>Backend belum dikonfigurasi.</b> Isi REALTIME_SERVER_URL.";
+document.getElementById("statusKoneksi").innerHTML = " <b>Backend belum dikonfigurasi.</b> Isi REALTIME_SERVER_URL.";
 toast("⚠️ URL backend realtime belum diatur.", "merah", 7000);
 return false;
 }
@@ -2491,12 +2471,12 @@ if(timer) timer.style.display = active ? "block" : "none";
 if(channelBtn) {
 channelBtn.disabled = recordLocalActive;
 channelBtn.classList.toggle("rec-btn-stop", recordChannelActive);
-channelBtn.textContent = recordChannelActive ? " STOP CHANNEL" : "🔴 REC CHANNEL";
+channelBtn.textContent = recordChannelActive ? "⏹ STOP CHANNEL" : "🔴 REC CHANNEL";
 }
 if(localBtn) {
 localBtn.disabled = recordChannelActive;
 localBtn.classList.toggle("rec-btn-stop", recordLocalActive);
-localBtn.textContent = recordLocalActive ? "⏹ STOP LOCAL" : "🎙️ VOICE NOTE";
+localBtn.textContent = recordLocalActive ? " STOP LOCAL" : "🎙️ VOICE NOTE";
 }
 if(status) {
 status.textContent =
@@ -2532,17 +2512,36 @@ const types = [
 ];
 return types.find(t => window.MediaRecorder && MediaRecorder.isTypeSupported(t)) || "";
 }
+
+// ===== FIX: Robust Remote Audio Capture =====
+function connectAudioElementToRecorder(audioEl) {
+    if (!recordChannelActive || !recordChannelContext || !recordChannelDestination) return;
+    if (connectedAudioElements.has(audioEl)) return;
+    if (!audioEl.srcObject) return;
+    try {
+        // createMediaElementSource is more reliable for remote WebRTC streams
+        const source = recordChannelContext.createMediaElementSource(audioEl);
+        source.connect(recordChannelContext.destination); // Keep playing to speakers
+        source.connect(recordChannelDestination); // Route to recorder
+        connectedAudioElements.add(audioEl);
+        console.log("[REC CHANNEL] Connected audio element to recorder:", audioEl.id);
+    } catch (e) {
+        console.warn("[REC CHANNEL] Error connecting audio element:", e);
+    }
+}
+
 function addIncomingRecordingSource(stream) {
-if(!recordChannelActive || !recordChannelContext || !recordChannelDestination || !stream) return;
-try {
-if(recordChannelSources.has(stream)) return;
-const source = recordChannelContext.createMediaStreamSource(stream);
-source.connect(recordChannelDestination);
-recordChannelSources.set(stream, source);
-} catch(e) {
-console.warn("[REC CHANNEL] Incoming source failed:", e);
+    if(!recordChannelActive || !recordChannelContext || !recordChannelDestination || !stream) return;
+    try {
+        if(recordChannelSources.has(stream)) return;
+        const source = recordChannelContext.createMediaStreamSource(stream);
+        source.connect(recordChannelDestination);
+        recordChannelSources.set(stream, source);
+    } catch(e) {
+        console.warn("[REC CHANNEL] Incoming source failed:", e);
+    }
 }
-}
+
 function removeRecordingAudioElements() {
 // no-op: remote audio elements remain untouched.
 }
@@ -2568,7 +2567,10 @@ micSource.connect(recordChannelDestination);
 recordChannelSources = new Map([[streamSaya, micSource]]);
 // Existing remote audio streams.
 document.querySelectorAll("audio").forEach(audioEl => {
-if(audioEl.srcObject) addIncomingRecordingSource(audioEl.srcObject);
+    connectAudioElementToRecorder(audioEl);
+    if(audioEl.srcObject && !connectedAudioElements.has(audioEl)) {
+        addIncomingRecordingSource(audioEl.srcObject);
+    }
 });
 const mimeType = getSupportedRecordingMime();
 recordChannelRecorder = new MediaRecorder(
@@ -2590,6 +2592,26 @@ recordChannelActive = true;
 recordStartTime = Date.now();
 updateRecordingUI("channel");
 startRecordingTimer();
+// ===== FIX: Setup observer untuk audio elements baru =====
+const audioObserver = new MutationObserver(mutations => {
+if(!recordChannelActive) return;
+mutations.forEach(mutation => {
+mutation.addedNodes.forEach(node => {
+if((node.tagName === 'AUDIO' || node.tagName === 'audio') && node.srcObject) {
+console.log("[REC CHANNEL] New audio element detected:", node.id);
+setTimeout(() => {
+    connectAudioElementToRecorder(node);
+    if(!connectedAudioElements.has(node)) {
+        addIncomingRecordingSource(node.srcObject);
+    }
+}, 500);
+}
+});
+});
+});
+audioObserver.observe(document.body, { childList: true, subtree: true });
+// Simpan reference untuk cleanup nanti
+window.__recAudioObserver = audioObserver;
 toast("🔴 REC CHANNEL dimulai.", "merah");
 } catch(e) {
 console.error("[REC CHANNEL] start:", e);
@@ -2631,6 +2653,11 @@ cleanupRecordChannel();
 await renderRecordingList();
 }
 function cleanupRecordChannel() {
+// ===== FIX: Cleanup observer =====
+if(window.__recAudioObserver) {
+window.__recAudioObserver.disconnect();
+window.__recAudioObserver = null;
+}
 recordChannelActive = false;
 stopRecordingTimer();
 if(recordChannelRecorder) {
@@ -2773,7 +2800,7 @@ const id = String(r.id);
 const duration = Math.floor((r.durationMs || r.duration_ms || 0) / 1000);
 const size = Number(r.sizeBytes || r.size_bytes || 0);
 const mine = r._type === "local-server" && String(r.senderId) === String(getCurrentUserIdSafe());
-const label = r._type === "channel-local" ? "🔴 CHANNEL" : "🎙️ LOCAL";
+const label = r._type === "channel-local" ? " CHANNEL" : "🎙️ LOCAL";
 const when = r.createdAt || r.created_at || r.date || "";
 return `
 <div class="rec-item">
@@ -2900,7 +2927,7 @@ let colorClass = "";
 let statusText = "";
 if(kbps === null || kbps === undefined) {
 el.className = "network-speed";
-el.textContent = "📡 Network: -- kb/s";
+el.textContent = " Network: -- kb/s";
 return;
 }
 if(kbps < 100) { colorClass = "bad"; statusText = " (lemah)"; }
@@ -3063,7 +3090,7 @@ resetFloorState();
 renderRecordingList();
 document.getElementById("idSaya").textContent = "";
 document.getElementById("jumlahPengguna").textContent = "";
-document.getElementById("infoChannel").textContent = c.muted ? "🔇 Channel ini sedang muted (suara dimatikan)" : "";
+document.getElementById("infoChannel").textContent = c.muted ? " Channel ini sedang muted (suara dimatikan)" : "";
 document.getElementById("statusKoneksi").className = "status status-kuning";
 document.getElementById("statusKoneksi").innerHTML = "🔌 <b>Langkah 1/4:</b> Menghubung ke server...";
 document.getElementById("kotakObrolan").innerHTML = "";
@@ -3188,7 +3215,7 @@ peer.reconnect();
 });
 peer.on("close", () => {
 document.getElementById("statusKoneksi").className = "status status-kuning";
-document.getElementById("statusKoneksi").innerHTML = "🔄 <b>Terputus:</b> Koneksi ditutup. Mencoba ulang...";
+document.getElementById("statusKoneksi").innerHTML = " <b>Terputus:</b> Koneksi ditutup. Mencoba ulang...";
 });
 }
 peer = await createPeer();
@@ -3376,7 +3403,14 @@ console.warn("[AUDIO] play blocked; waiting for user gesture:", err);
 };
 tryPlayRemote();
 // REC CHANNEL only: capture incoming channel audio. WebRTC call is unchanged.
-addIncomingRecordingSource(suaraOrang);
+if(recordChannelActive) {
+    setTimeout(() => {
+        connectAudioElementToRecorder(el);
+        if(!connectedAudioElements.has(el)) {
+            addIncomingRecordingSource(suaraOrang);
+        }
+    }, 500);
+}
 });
 }
 // ========== DEBUG v5: WEBRTC MEDIA / ICE / AUDIO OUTPUT ==========
@@ -3537,7 +3571,7 @@ if(whisperMode && whisperTarget) {
 myFloorStatus = 'talking';
 if(streamSaya) streamSaya.getAudioTracks().forEach(t => t.enabled = true);
 micAktif = true;
-if(btn) { btn.classList.add('ptt-active'); btn.textContent = '🔒 WHISPER...'; }
+if(btn) { btn.classList.add('ptt-active'); btn.textContent = ' WHISPER...'; }
 // Kirim whisper ke target
 const targetPeerId = channelAktif + "-" + whisperTarget.replace(/\s/g,"-");
 if(peer && !koneksi[targetPeerId]) {
@@ -3605,7 +3639,7 @@ if(whisperMode && whisperTarget) {
 myFloorStatus = 'idle';
 if(streamSaya) streamSaya.getAudioTracks().forEach(t => t.enabled = false);
 micAktif = false;
-if(btn) { btn.classList.remove('ptt-active', 'ptt-priority'); btn.textContent = '🔒 Whisper ke ' + whisperTarget; }
+if(btn) { btn.classList.remove('ptt-active', 'ptt-priority'); btn.textContent = ' Whisper ke ' + whisperTarget; }
 // Kirim whisper end ke target
 const targetPeerId = channelAktif + "-" + whisperTarget.replace(/\s/g,"-");
 if(koneksi[targetPeerId]) {
@@ -3678,7 +3712,7 @@ toast(`⏱️ Segera selesai! ${Math.round(total * 0.1)} detik tersisa!`, "merah
 }
 if(elapsed >= total) {
 playTimeoutDangerBeep();
-toast(`⏱️ PTT timeout! Batas ${total} detik tercapai.`, "kuning");
+toast(`️ PTT timeout! Batas ${total} detik tercapai.`, "kuning");
 pttUp();
 }
 }, 1000);
@@ -3706,7 +3740,7 @@ if(whisperMode) {
 targetBox.style.display = "block";
 indicator.classList.add("aktif");
 updateWhisperTargetList();
-if(btn) btn.textContent = '🔒 Pilih Target Whisper';
+if(btn) btn.textContent = ' Pilih Target Whisper';
 // Release floor if talking
 if(myFloorStatus === 'talking' || myFloorStatus === 'waiting') {
 pttUp();
@@ -3736,7 +3770,7 @@ const btn = document.getElementById("tombolPTT");
 if(whisperTarget && btn) {
 btn.textContent = '🔒 Whisper ke ' + whisperTarget;
 } else if(btn) {
-btn.textContent = '🔒 Pilih Target Whisper';
+btn.textContent = ' Pilih Target Whisper';
 }
 }
 function broadcastFloorState() {
@@ -3790,7 +3824,7 @@ myFloorStatus = 'talking';
 if(streamSaya) streamSaya.getAudioTracks().forEach(t => t.enabled = true);
 micAktif = true;
 const btn = document.getElementById("tombolPTT");
-if(btn) { btn.classList.add('ptt-active'); btn.textContent = '🎙️ SEDANG BICARA'; btn.classList.remove('ptt-waiting'); }
+if(btn) { btn.classList.add('ptt-active'); btn.textContent = '️ SEDANG BICARA'; btn.classList.remove('ptt-waiting'); }
 updateFloorDisplay();
 perbaruiDaftarPengguna();
 updateHeartbeat();
@@ -4031,7 +4065,7 @@ panel = document.createElement("div");
 panel.id = "debugPanel";
 panel.innerHTML = `
 <div class="debug-head">
-<strong> DEBUG GLOBAL v6 AUDIO UNLOCK</strong>
+<strong>🛠 DEBUG GLOBAL v6 AUDIO UNLOCK</strong>
 <div class="debug-actions">
 <button class="debug-mini-btn" type="button" onclick="refreshDebugPanel()">↻ Refresh</button>
 <button class="debug-mini-btn" type="button" onclick="copyDebugInfo()">📋 Copy</button>
@@ -4104,7 +4138,7 @@ return `${m}:${s}`;
 async function renderAllArchives() {
 const container = document.getElementById("arsipListContainer");
 if(!container) return;
-container.innerHTML = '<div class="empty-state"><div class="empty-state-icon">⏳</div>Memuat arsip...</div>';
+container.innerHTML = '<div class="empty-state"><div class="empty-state-icon"></div>Memuat arsip...</div>';
 try {
 const db = await openRecordingDB();
 const allRows = await new Promise((resolve, reject) => {
@@ -4115,12 +4149,10 @@ req.onerror = () => reject(req.error);
 });
 db.close();
 allRows.sort((a,b) => b.createdAt - a.createdAt);
-
 if(allRows.length === 0) {
 container.innerHTML = '<div class="empty-state"><div class="empty-state-icon">📁</div>Belum ada rekaman tersimpan di perangkat ini.</div>';
 return;
 }
-
 container.innerHTML = allRows.map(r => {
 const url = URL.createObjectURL(r.blob);
 const duration = Math.floor((r.durationMs || 0) / 1000);
@@ -4129,13 +4161,13 @@ const when = new Date(r.createdAt).toLocaleString('id-ID');
 return `
 <div class="rec-item" style="margin-bottom:10px; padding:12px; flex-wrap:wrap;">
 <div style="flex:1; min-width:200px;">
-<div class="rec-item-name" style="font-size:14px;"> ${escapeHtml(r.group || '-')} / ${escapeHtml(r.channel || '-')}</div>
+<div class="rec-item-name" style="font-size:14px;"> 📂 ${escapeHtml(r.group || '-')} / ${escapeHtml(r.channel || '-')}</div>
 <div class="rec-item-meta">${when} • ${formatDuration(duration)} • ${(size/1024).toFixed(1)} KB</div>
 </div>
 <div class="rec-item-actions" style="gap:8px; margin-top:8px;">
 <audio controls src="${url}" style="height:36px; max-width:200px;"></audio>
 <a href="${url}" download="rekaman_${r.channel || 'channel'}_${r.createdAt}.webm" class="btn btn-sm btn-hijau" style="text-decoration:none;">️ Unduh</a>
-<button class="btn btn-sm btn-merah" onclick="hapusArsipPribadi('${escapeJs(r.id)}')">🗑️</button>
+<button class="btn btn-sm btn-merah" onclick="hapusArsipPribadi('${escapeJs(r.id)}')">️</button>
 </div>
 </div>`;
 }).join("");
