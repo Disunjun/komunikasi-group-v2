@@ -2581,36 +2581,36 @@ async function toggleRecordChannel() {
         
         // 2. Rekam suara user lain yang SUDAH ADA di halaman
         document.querySelectorAll("audio").forEach(audioEl => {
-            connectAudioElementToRecorder(audioEl);
+            if(audioEl.srcObject) connectAudioElementToRecorder(audioEl);
         });
-
+        
         const mimeType = getSupportedRecordingMime();
         recordChannelRecorder = new MediaRecorder(recordChannelDestination.stream, mimeType ? { mimeType } : {});
         recordChannelChunks = [];
         recordChannelRecorder.ondataavailable = e => { if(e.data?.size) recordChannelChunks.push(e.data); };
         recordChannelRecorder.onstop = saveRecordChannel;
         recordChannelRecorder.onerror = e => { console.error("[REC]", e); toast("REC CHANNEL gagal.", "merah"); cleanupRecordChannel(); };
-        
         recordChannelRecorder.start(1000);
         recordChannelActive = true;
         recordStartTime = Date.now();
         updateRecordingUI("channel");
         startRecordingTimer();
-
+        
         // 3. Pantau jika ada user baru masuk saat rekaman berjalan
         const audioObserver = new MutationObserver(mutations => {
             if(!recordChannelActive) return;
             mutations.forEach(mutation => {
                 mutation.addedNodes.forEach(node => {
                     if(node.tagName === 'AUDIO' && node.srcObject) {
-                        setTimeout(() => connectAudioElementToRecorder(node), 500);
+                        // Connect segera, jangan delay
+                        setTimeout(() => connectAudioElementToRecorder(node), 50);
                     }
                 });
             });
         });
         audioObserver.observe(document.body, { childList: true, subtree: true });
         window.__recAudioObserver = audioObserver;
-
+        
         toast("🔴 REC CHANNEL dimulai (Suara Anda + User Lain).", "merah");
     } catch(e) { console.error("[REC] start:", e); toast("Gagal: " + e.message, "merah"); cleanupRecordChannel(); }
 }
