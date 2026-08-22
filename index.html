@@ -2605,14 +2605,16 @@ async function toggleRecordChannel() {
         
  // 3. Pantau jika ada user baru masuk saat rekaman berjalan
 const audioObserver = new MutationObserver(mutations => {
-if(!recordChannelActive) return;
-mutations.forEach(mutation => {
-mutation.addedNodes.forEach(node => {
-if(node.tagName === 'AUDIO' && node.srcObject) {
-setTimeout(() => connectAudioElementToRecorder(node), 500);
-}
-});
-});
+    if(!recordChannelActive) return;
+    mutations.forEach(mutation => {
+        mutation.addedNodes.forEach(node => {
+            if(node.tagName === 'AUDIO' && node.srcObject) {
+                console.log("[REC] 🆕 Audio element terdeteksi:", node.id);
+                // LANGSUNG connect, jangan delay!
+                connectAudioElementToRecorder(node);
+            }
+        });
+    });
 });
         audioObserver.observe(document.body, { childList: true, subtree: true });
         window.__recAudioObserver = audioObserver;
