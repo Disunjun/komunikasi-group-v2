@@ -1,3 +1,48 @@
+KOMUNIKASI GROUP V2 — FULL SERVER.JS
+Recording V1/P1 integration
+=====================================
+
+Base:
+- Komunikasi Group V2 backend 2.4.1-E / A1.5
+- Existing WebRTC / Socket.IO audio path preserved
+- Existing PostgreSQL/Supabase schema ownership preserved
+- Recording V1/P1 added as a separate HTTP + Supabase Storage component
+
+Recording database contract:
+- user_group_channel
+- voice_messages
+from 001_recording_v1.sql
+
+Required Railway Variables for recording:
+- SUPABASE_URL
+- SUPABASE_SERVICE_ROLE_KEY
+- RECORDING_BUCKET=voice-recordings (optional)
+- RECORDING_MAX_SIZE_BYTES=26214400 (optional)
+- RECORDING_MAX_DURATION_MS=300000 (optional)
+- RECORDING_TTL_DAYS=7 (optional)
+
+Upload API contract:
+POST /api/recordings/upload
+Headers:
+  Authorization: Bearer <user token>
+  Content-Type: audio/webm
+  X-Client-Upload-Id: <unique id>
+  X-Group-Name: <group>
+  X-Channel-Name: <channel>
+  X-Duration-Ms: <duration in ms>
+Body:
+  raw audio bytes
+
+Important:
+- This file does NOT create/alter database tables.
+- Existing PC↔HP live voice/WebRTC path is not modified.
+- Recording storage uses the private Supabase Storage bucket.
+- Signed playback URLs expire after 5 minutes.
+- User recordings expire after RECORDING_TTL_DAYS.
+- This file is intended to replace server.js as a complete file.
+
+--- BEGIN server.js ---
+
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
@@ -6,64 +51,71 @@ import crypto from 'crypto';
 import { promisify } from 'util';
 import { Server } from 'socket.io';
 import pg from 'pg';
+import { createClient } from '@supabase/supabase-js';
 
 const { Pool } = pg;
 const scryptAsync = promisify(crypto.scrypt);
+
+const SERVER_VERSION = '2.4.1-E-A1.5 + Recording V1/P1';
+
+const SUPABASE_URL = String(process.env.SUPABASE_URL || '').trim();
+const SUPABASE_SERVICE_ROLE_KEY = String(process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
+const RECORDING_BUCKET = String(process.env.RECORDING_BUCKET || 'voice-recordings').trim();
+const RECORDING_MAX_SIZE_BYTES = Math.max(
+  1_048_576,
+  Number(process.env.RECORDING_MAX_SIZE_BYTES || 25 * 1024 * 1024)
+);
+const RECORDING_MAX_DURATION_MS = Math.max(
+  1000,
+  Number(process.env.RECORDING_MAX_DURATION_MS || 5 * 60 * 1000)
+);
+const RECORDING_TTL_DAYS = Math.max(
+  1,
+  Number(process.env.RECORDING_TTL_DAYS || 7)
+);
+
+const supabaseAdmin =
+  SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
+    ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+        auth: { autoRefreshToken: false, persistSession: false }
+      })
+    : null;
 const app = express();
 const server = http.createServer(app);
 const PORT = Number(process.env.PORT || 3000);
-const FRONTEND_ORIGINS = (process.env.FRONTEND_ORIGINS || '')
-  .split(',')
-  .map(s => s.trim())
-  .filter(Boolean);
+const FRONTEND_ORIGINS = (process.env.FRONTEND_ORIGINS || '*').split(',').map(s => s.trim()).filter(Boolean);
 const ADMIN_NAME = process.env.ADMIN_NAME || 'Didik Suntoro';
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'D1d1kSunt0r0@#$';
 
-// ===== CORS / FRONTEND ACCESS =====
-// Production frontend is explicitly allowed. Keep the old frontend origin
-// during the migration so an older cached client is not unexpectedly blocked.
-const ALLOWED_CORS_ORIGINS = Array.from(new Set([
-  ...FRONTEND_ORIGINS,
-  'https://komunikasi-group-1.netlify.app',
-  'https://komunikasi-group.netlify.app'
-]));
-
-function corsOriginAllowed(origin) {
-  if (!origin) return true; // server-to-server / curl / health checks
-  if (ALLOWED_CORS_ORIGINS.includes('*')) return true;
-  return ALLOWED_CORS_ORIGINS.includes(origin);
-}
-
-const corsOptions = {
-  origin(origin, callback) {
-    if (corsOriginAllowed(origin)) return callback(null, true);
-    console.warn(`[CORS] Origin ditolak: ${origin}`);
-    return callback(null, false);
-  },
-  methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+const corsOrigin = FRONTEND_ORIGINS.includes('*') ? true : FRONTEND_ORIGINS;
+const io = new Server(server, { cors: { origin: corsOrigin, methods: ['GET','HEAD','POST','PUT','PATCH','DELETE','OPTIONS'] }, transports: ['websocket','polling'] });
+app.use(cors({
+  origin: corsOrigin,
+  methods: ['GET','HEAD','POST','PUT','PATCH','DELETE','OPTIONS'],
+  allowedHeaders: [
+    'Content-Type',
+    'Authorization',
+    'X-Client-Upload-Id',
+    'X-Group-Name',
+    'X-Channel-Name',
+    'X-Duration-Ms'
+  ],
   optionsSuccessStatus: 204
-};
-
-const io = new Server(server, {
-  cors: {
-    origin: (origin, callback) => {
-      if (corsOriginAllowed(origin)) return callback(null, true);
-      console.warn(`[SOCKET CORS] Origin ditolak: ${origin}`);
-      return callback(null, false);
-    },
-    methods: corsOptions.methods,
-    allowedHeaders: corsOptions.allowedHeaders
-  },
-  transports: ['websocket', 'polling']
-});
-
-// Express-level CORS handles browser preflight (OPTIONS) before auth routes.
-app.use(cors(corsOptions));
-app.options(/.*/, cors(corsOptions));
+}));
+app.options(/.*/, cors({
+  origin: corsOrigin,
+  methods: ['GET','HEAD','POST','PUT','PATCH','DELETE','OPTIONS'],
+  allowedHeaders: [
+    'Content-Type',
+    'Authorization',
+    'X-Client-Upload-Id',
+    'X-Group-Name',
+    'X-Channel-Name',
+    'X-Duration-Ms'
+  ],
+  optionsSuccessStatus: 204
+}));
 app.use(express.json({ limit: '64kb' }));
-
-console.log('[CORS] Allowed origins:', ALLOWED_CORS_ORIGINS.join(', '));
 
 let db = null;
 if (process.env.DATABASE_URL) {
@@ -78,7 +130,11 @@ async function hashPassword(password) {
 }
 async function verifyPassword(password, stored) {
   if (!stored) return false;
-  if (!stored.startsWith('scrypt$')) return crypto.timingSafeEqual(Buffer.from(String(password)), Buffer.from(String(stored)));
+  if (!stored.startsWith('scrypt$')) {
+    const a = Buffer.from(String(password));
+    const b = Buffer.from(String(stored));
+    return a.length === b.length && crypto.timingSafeEqual(a, b);
+  }
   const [, salt, hex] = stored.split('$');
   const derived = Buffer.from(await scryptAsync(password, salt, 64));
   const expected = Buffer.from(hex, 'hex');
@@ -150,60 +206,13 @@ async function testDatabase() {
 async function initializeDatabase() {
   if (!db) return;
   try {
-    await db.query(`CREATE TABLE IF NOT EXISTS users (id BIGSERIAL PRIMARY KEY, username VARCHAR(100) UNIQUE NOT NULL, password_hash TEXT, role VARCHAR(30) DEFAULT 'user', active BOOLEAN DEFAULT TRUE, muted BOOLEAN DEFAULT FALSE, created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW())`);
-    await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS banned BOOLEAN DEFAULT FALSE`);
-    await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS created_by VARCHAR(100) DEFAULT 'system'`);
-    await db.query(`CREATE TABLE IF NOT EXISTS online_sessions (socket_id VARCHAR(255) PRIMARY KEY, username VARCHAR(100) NOT NULL, group_name VARCHAR(100), channel_name VARCHAR(100), peer_id VARCHAR(255), mic_status BOOLEAN DEFAULT FALSE, floor_status VARCHAR(30) DEFAULT 'idle', updated_at TIMESTAMPTZ DEFAULT NOW())`);
-    await db.query(`CREATE TABLE IF NOT EXISTS chat_messages (id BIGSERIAL PRIMARY KEY, username VARCHAR(100) NOT NULL, group_name VARCHAR(100), channel_name VARCHAR(100), message TEXT NOT NULL, created_at TIMESTAMPTZ DEFAULT NOW())`);
-    await db.query(`CREATE TABLE IF NOT EXISTS auth_sessions (id BIGSERIAL PRIMARY KEY,user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,token_hash CHAR(64) UNIQUE NOT NULL,created_at TIMESTAMPTZ DEFAULT NOW(),last_used_at TIMESTAMPTZ DEFAULT NOW(),expires_at TIMESTAMPTZ NOT NULL,revoked_at TIMESTAMPTZ)`);
-    await db.query(`CREATE INDEX IF NOT EXISTS idx_auth_sessions_token_hash ON auth_sessions(token_hash)`);
-    await db.query(`CREATE INDEX IF NOT EXISTS idx_auth_sessions_user_id ON auth_sessions(user_id)`);
-    await db.query(`CREATE INDEX IF NOT EXISTS idx_auth_sessions_expires_at ON auth_sessions(expires_at)`);
-    await db.query(`CREATE TABLE IF NOT EXISTS admin_sessions (id BIGSERIAL PRIMARY KEY,admin_user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,token_hash CHAR(64) UNIQUE NOT NULL,created_at TIMESTAMPTZ DEFAULT NOW(),last_used_at TIMESTAMPTZ DEFAULT NOW(),expires_at TIMESTAMPTZ NOT NULL,revoked_at TIMESTAMPTZ)`);
-    await db.query(`CREATE INDEX IF NOT EXISTS idx_admin_sessions_token_hash ON admin_sessions(token_hash)`);
-    await db.query(`CREATE INDEX IF NOT EXISTS idx_admin_sessions_admin_user_id ON admin_sessions(admin_user_id)`);
-    await db.query(`DELETE FROM admin_sessions WHERE expires_at<=NOW() OR revoked_at IS NOT NULL`);
-    await db.query(`DELETE FROM auth_sessions WHERE expires_at<=NOW() OR revoked_at IS NOT NULL`);
-    // ===== ADMIN SYNC STAGE A: PostgreSQL schema only =====
-    await db.query(`CREATE TABLE IF NOT EXISTS app_config (
-      config_key VARCHAR(100) PRIMARY KEY,
-      config_value JSONB NOT NULL,
-      updated_by VARCHAR(100) DEFAULT 'system',
-      updated_at TIMESTAMPTZ DEFAULT NOW()
-    )`);
-
-    await db.query(`CREATE TABLE IF NOT EXISTS audit_logs (
-      id BIGSERIAL PRIMARY KEY,
-      admin_name VARCHAR(100) NOT NULL,
-      action VARCHAR(100) NOT NULL,
-      target TEXT,
-      detail TEXT,
-      created_at TIMESTAMPTZ DEFAULT NOW()
-    )`);
-
-    const defaultGroups = [
-      {nama:'Grup 1',prefix:'',status:'aktif',channel:[
-        {nama:'CH 01',prefix:'',maxUsers:0,pttTimeout:0,status:'aktif',locked:false,muted:false},
-        {nama:'CH 02',prefix:'',maxUsers:5,pttTimeout:30,status:'aktif',locked:false,muted:false},
-        {nama:'CH 03',prefix:'',maxUsers:0,pttTimeout:0,status:'aktif',locked:false,muted:false}
-      ]},
-      {nama:'Grup 2',prefix:'',status:'aktif',channel:[
-        {nama:'CH 01',prefix:'',maxUsers:0,pttTimeout:0,status:'aktif',locked:false,muted:false},
-        {nama:'CH 02',prefix:'',maxUsers:3,pttTimeout:15,status:'aktif',locked:false,muted:false}
-      ]}
-    ];
-
-    await db.query(
-      `INSERT INTO app_config(config_key,config_value,updated_by)
-       VALUES($1,$2::jsonb,$3)
-       ON CONFLICT(config_key) DO NOTHING`,
-      ['groups', JSON.stringify(defaultGroups), 'system']
-    );
-
-    const adminHash = await hashPassword(ADMIN_PASSWORD);
-    await db.query(`INSERT INTO users(username,password_hash,role,active,banned,muted,created_by) VALUES($1,$2,'admin',TRUE,FALSE,FALSE,'system') ON CONFLICT(username) DO UPDATE SET role='admin'`, [ADMIN_NAME, adminHash]);
-    console.log('[DB] Database tables READY.');
-  } catch(e) { console.error('[DB] Database initialization ERROR:', e.message); }
+    // Database schema is managed exclusively through Supabase SQL Editor.
+    // server.js must NOT create tables, columns, indexes, default groups, or default admin.
+    await db.query('SELECT 1');
+    console.log('[DB] Database schema check OK. Schema is managed by Supabase SQL Editor.');
+  } catch(e) {
+    console.error('[DB] Database schema check ERROR:', e.message);
+  }
 }
 
 // ===== USER / AUTH API =====
@@ -275,7 +284,7 @@ async function savePresence(s){ if(!db||!s)return; try{await db.query(`INSERT IN
 async function removePresence(id){if(!db)return;try{await db.query(`DELETE FROM online_sessions WHERE socket_id=$1`,[id]);}catch(e){console.error('[DB] removePresence:',e.message);}}
 function emitPresence(){io.emit('presence:update',publicSessions());}
 
-app.get('/health',async(req,res)=>{let database='disabled';if(db){try{await db.query('SELECT 1');database='connected';}catch{database='error';}}res.json({ok:true,service:'komunikasi-group-realtime',version:'2.4.1-E-A1.5',database,time:new Date().toISOString(),users:sessions.size});});
+app.get('/health',async(req,res)=>{let database='disabled';if(db){try{await db.query('SELECT 1');database='connected';}catch{database='error';}}res.json({ok:true,service:'komunikasi-group-realtime',version:SERVER_VERSION,database,time:new Date().toISOString(),users:sessions.size});});
 
 // ===== ADMIN SYNC STAGE B: PostgreSQL Group/Channel API =====
 app.get('/api/config/groups', async (req,res) => {
@@ -408,6 +417,555 @@ app.get('/api/turn-credentials', async (req, res) => {
 
 app.get('/api/db-test',async(req,res)=>{if(!requireDb(res))return;try{const r=await db.query(`SELECT NOW() AS server_time,current_database() AS database_name`);res.json({ok:true,database:'connected',result:r.rows[0]});}catch(e){res.status(500).json({ok:false,error:e.message});}});
 
+
+// ============================================================================
+// RECORDING V1 / P1
+// ============================================================================
+// Database ownership remains in Supabase SQL Editor.
+// server.js only validates, stores, reads and deletes recording objects.
+//
+// Required database tables from 001_recording_v1.sql:
+//   user_group_channel
+//   voice_messages
+//
+// Required Railway variables:
+//   SUPABASE_URL
+//   SUPABASE_SERVICE_ROLE_KEY
+//
+// Bucket:
+//   voice-recordings (default; can be overridden by RECORDING_BUCKET)
+//
+// Upload contract:
+//   POST /api/recordings/upload
+//   Authorization: Bearer <user-token>
+//   Content-Type: audio/webm (or supported audio type)
+//   X-Client-Upload-Id: unique client id
+//   X-Group-Name: group name
+//   X-Channel-Name: channel name
+//   X-Duration-Ms: recording duration in milliseconds
+//   Request body: raw audio bytes
+//
+// This keeps the existing WebRTC/Socket.IO audio path untouched.
+// ============================================================================
+
+const RECORDING_MIME_TYPES = new Set([
+  'audio/webm',
+  'audio/webm;codecs=opus',
+  'audio/ogg',
+  'audio/ogg;codecs=opus',
+  'audio/wav',
+  'audio/x-wav',
+  'audio/mpeg',
+  'audio/mp4',
+  'audio/aac'
+]);
+
+function recordingMimeAllowed(mimeType) {
+  const base = String(mimeType || '').split(';')[0].trim().toLowerCase();
+  return RECORDING_MIME_TYPES.has(base) || base === 'audio/webm';
+}
+
+function recordingSafePart(value, fallback = 'unknown') {
+  const cleaned = String(value || '')
+    .trim()
+    .replace(/[^a-zA-Z0-9._-]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 120);
+  return cleaned || fallback;
+}
+
+function recordingExtension(mimeType) {
+  const base = String(mimeType || '').split(';')[0].trim().toLowerCase();
+  if (base === 'audio/ogg') return 'ogg';
+  if (base === 'audio/wav' || base === 'audio/x-wav') return 'wav';
+  if (base === 'audio/mpeg') return 'mp3';
+  if (base === 'audio/mp4') return 'm4a';
+  if (base === 'audio/aac') return 'aac';
+  return 'webm';
+}
+
+function recordingExpiryDate() {
+  return new Date(Date.now() + RECORDING_TTL_DAYS * 86400000);
+}
+
+function recordingStorageReady() {
+  return !!supabaseAdmin;
+}
+
+function requireRecordingStorage(res) {
+  if (!supabaseAdmin) {
+    return res.status(503).json({
+      ok: false,
+      message: 'Supabase Storage recording belum dikonfigurasi di server.'
+    });
+  }
+  return true;
+}
+
+function recordingPublic(row, signedUrl = null) {
+  return {
+    id: row.id,
+    clientUploadId: row.client_upload_id,
+    senderId: row.sender_id,
+    group: row.group_name,
+    channel: row.channel_name,
+    storagePath: row.storage_path,
+    mimeType: row.mime_type,
+    sizeBytes: Number(row.size_bytes),
+    durationMs: Number(row.duration_ms),
+    createdAt: row.created_at,
+    expiresAt: row.expires_at,
+    deletedAt: row.deleted_at || null,
+    url: signedUrl
+  };
+}
+
+async function getRecordingUser(req) {
+  const token = bearerToken(req);
+  if (!token) return null;
+  return getUserFromToken(token);
+}
+
+// Return recording list for the authenticated user's current group/channel.
+app.get('/api/recordings', requireUser, async (req, res) => {
+  if (!requireDb(res)) return;
+
+  try {
+    const group = String(req.query?.group || '').trim();
+    const channel = String(req.query?.channel || '').trim();
+    const limit = Math.min(100, Math.max(1, Number(req.query?.limit || 50)));
+
+    if (!group || !channel) {
+      return res.status(400).json({
+        ok: false,
+        message: 'Group dan channel wajib diisi.'
+      });
+    }
+
+    const r = await db.query(
+      `SELECT id,client_upload_id,sender_id,group_name,channel_name,
+              storage_path,mime_type,size_bytes,duration_ms,
+              created_at,expires_at,deleted_at
+         FROM voice_messages
+        WHERE group_name=$1
+          AND channel_name=$2
+          AND deleted_at IS NULL
+          AND expires_at>NOW()
+        ORDER BY created_at DESC
+        LIMIT $3`,
+      [group, channel, limit]
+    );
+
+    const recordings = [];
+
+    for (const row of r.rows) {
+      let signedUrl = null;
+
+      if (supabaseAdmin) {
+        const signed = await supabaseAdmin.storage
+          .from(RECORDING_BUCKET)
+          .createSignedUrl(row.storage_path, 300);
+
+        if (!signed.error) signedUrl = signed.data?.signedUrl || null;
+      }
+
+      recordings.push(recordingPublic(row, signedUrl));
+    }
+
+    return res.json({
+      ok: true,
+      bucket: RECORDING_BUCKET,
+      recordings
+    });
+  } catch (e) {
+    console.error('[RECORDING] LIST ERROR:', e.message);
+    return res.status(500).json({
+      ok: false,
+      message: 'Gagal membaca daftar recording.'
+    });
+  }
+});
+
+// Upload raw audio bytes to the private Supabase Storage bucket and register metadata.
+app.post(
+  '/api/recordings/upload',
+  requireUser,
+  express.raw({
+    type: ['audio/*', 'application/octet-stream'],
+    limit: `${Math.max(1, Math.ceil(RECORDING_MAX_SIZE_BYTES / 1048576))}mb`
+  }),
+  async (req, res) => {
+    if (!requireDb(res)) return;
+    if (!requireRecordingStorage(res)) return;
+
+    try {
+      if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
+        return res.status(400).json({
+          ok: false,
+          message: 'Body recording kosong.'
+        });
+      }
+
+      if (req.body.length > RECORDING_MAX_SIZE_BYTES) {
+        return res.status(413).json({
+          ok: false,
+          message: 'Ukuran recording melebihi batas server.'
+        });
+      }
+
+      const mimeType = String(req.get('content-type') || 'audio/webm').trim();
+      const clientUploadId = String(req.get('x-client-upload-id') || '').trim();
+      const group = String(req.get('x-group-name') || '').trim();
+      const channel = String(req.get('x-channel-name') || '').trim();
+      const durationMs = Number(req.get('x-duration-ms') || 0);
+
+      if (!clientUploadId || clientUploadId.length > 200) {
+        return res.status(400).json({
+          ok: false,
+          message: 'X-Client-Upload-Id tidak valid.'
+        });
+      }
+
+      if (!group || group.length > 120 || !channel || channel.length > 120) {
+        return res.status(400).json({
+          ok: false,
+          message: 'Group/channel recording tidak valid.'
+        });
+      }
+
+      if (!Number.isFinite(durationMs) ||
+          durationMs <= 0 ||
+          durationMs > RECORDING_MAX_DURATION_MS) {
+        return res.status(400).json({
+          ok: false,
+          message: 'Durasi recording tidak valid atau melebihi batas.'
+        });
+      }
+
+      if (!recordingMimeAllowed(mimeType)) {
+        return res.status(415).json({
+          ok: false,
+          message: `MIME type recording tidak didukung: ${mimeType}`
+        });
+      }
+
+      // Idempotency: if the same client upload was already registered,
+      // return the existing row instead of creating a duplicate object.
+      const existing = await db.query(
+        `SELECT id,client_upload_id,sender_id,group_name,channel_name,
+                storage_path,mime_type,size_bytes,duration_ms,
+                created_at,expires_at,deleted_at
+           FROM voice_messages
+          WHERE sender_id=$1
+            AND client_upload_id=$2
+          LIMIT 1`,
+        [req.user.id, clientUploadId]
+      );
+
+      if (existing.rows[0]) {
+        let signedUrl = null;
+
+        const signed = await supabaseAdmin.storage
+          .from(RECORDING_BUCKET)
+          .createSignedUrl(existing.rows[0].storage_path, 300);
+
+        if (!signed.error) signedUrl = signed.data?.signedUrl || null;
+
+        return res.json({
+          ok: true,
+          duplicate: true,
+          recording: recordingPublic(existing.rows[0], signedUrl)
+        });
+      }
+
+      // Keep a stable per-user/group/channel namespace in Storage.
+      const extension = recordingExtension(mimeType);
+      const safeGroup = recordingSafePart(group, 'group');
+      const safeChannel = recordingSafePart(channel, 'channel');
+      const clientPart = recordingSafePart(clientUploadId, crypto.randomUUID());
+
+      const storagePath =
+        `${req.user.id}/${safeGroup}/${safeChannel}/` +
+        `${Date.now()}-${clientPart}.${extension}`;
+
+      const upload = await supabaseAdmin.storage
+        .from(RECORDING_BUCKET)
+        .upload(storagePath, req.body, {
+          contentType: mimeType,
+          upsert: false,
+          cacheControl: '3600'
+        });
+
+      if (upload.error) {
+        console.error('[RECORDING] STORAGE UPLOAD ERROR:', upload.error.message);
+        return res.status(502).json({
+          ok: false,
+          message: 'Gagal mengunggah recording ke Supabase Storage.'
+        });
+      }
+
+      const expiresAt = recordingExpiryDate();
+
+      let inserted;
+      try {
+        const r = await db.query(
+          `INSERT INTO voice_messages
+             (client_upload_id,sender_id,group_name,channel_name,
+              storage_path,mime_type,size_bytes,duration_ms,expires_at)
+           VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)
+           RETURNING id,client_upload_id,sender_id,group_name,channel_name,
+                     storage_path,mime_type,size_bytes,duration_ms,
+                     created_at,expires_at,deleted_at`,
+          [
+            clientUploadId,
+            req.user.id,
+            group,
+            channel,
+            storagePath,
+            mimeType,
+            req.body.length,
+            Math.floor(durationMs),
+            expiresAt
+          ]
+        );
+
+        inserted = r.rows[0];
+      } catch (dbError) {
+        // If DB registration fails, remove the object so Storage does not
+        // contain an orphan recording.
+        await supabaseAdmin.storage
+          .from(RECORDING_BUCKET)
+          .remove([storagePath])
+          .catch(() => {});
+
+        if (dbError.code === '23505') {
+          const duplicate = await db.query(
+            `SELECT id,client_upload_id,sender_id,group_name,channel_name,
+                    storage_path,mime_type,size_bytes,duration_ms,
+                    created_at,expires_at,deleted_at
+               FROM voice_messages
+              WHERE sender_id=$1 AND client_upload_id=$2
+              LIMIT 1`,
+            [req.user.id, clientUploadId]
+          );
+
+          if (duplicate.rows[0]) {
+            return res.json({
+              ok: true,
+              duplicate: true,
+              recording: recordingPublic(duplicate.rows[0])
+            });
+          }
+        }
+
+        throw dbError;
+      }
+
+      const signed = await supabaseAdmin.storage
+        .from(RECORDING_BUCKET)
+        .createSignedUrl(storagePath, 300);
+
+      const signedUrl = signed.error ? null : (signed.data?.signedUrl || null);
+
+      console.log(
+        '[RECORDING] UPLOADED:',
+        req.user.username,
+        group,
+        channel,
+        `${req.body.length} bytes`
+      );
+
+      return res.status(201).json({
+        ok: true,
+        duplicate: false,
+        recording: recordingPublic(inserted, signedUrl)
+      });
+    } catch (e) {
+      console.error('[RECORDING] UPLOAD ERROR:', e.message);
+      return res.status(500).json({
+        ok: false,
+        message: 'Gagal menyimpan recording.'
+      });
+    }
+  }
+);
+
+// Return a short-lived signed URL for one recording.
+app.get('/api/recordings/:id/url', requireUser, async (req, res) => {
+  if (!requireDb(res)) return;
+  if (!requireRecordingStorage(res)) return;
+
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id < 1) {
+      return res.status(400).json({ ok: false, message: 'ID recording tidak valid.' });
+    }
+
+    const r = await db.query(
+      `SELECT id,client_upload_id,sender_id,group_name,channel_name,
+              storage_path,mime_type,size_bytes,duration_ms,
+              created_at,expires_at,deleted_at
+         FROM voice_messages
+        WHERE id=$1
+          AND deleted_at IS NULL
+          AND expires_at>NOW()
+        LIMIT 1`,
+      [id]
+    );
+
+    const row = r.rows[0];
+    if (!row) {
+      return res.status(404).json({
+        ok: false,
+        message: 'Recording tidak ditemukan atau sudah kedaluwarsa.'
+      });
+    }
+
+    const signed = await supabaseAdmin.storage
+      .from(RECORDING_BUCKET)
+      .createSignedUrl(row.storage_path, 300);
+
+    if (signed.error || !signed.data?.signedUrl) {
+      console.error('[RECORDING] SIGNED URL ERROR:', signed.error?.message);
+      return res.status(502).json({
+        ok: false,
+        message: 'Gagal membuat URL recording.'
+      });
+    }
+
+    return res.json({
+      ok: true,
+      url: signed.data.signedUrl,
+      expiresIn: 300,
+      recording: recordingPublic(row)
+    });
+  } catch (e) {
+    console.error('[RECORDING] URL ERROR:', e.message);
+    return res.status(500).json({
+      ok: false,
+      message: 'Gagal membuat URL recording.'
+    });
+  }
+});
+
+// Delete own recording: soft-delete DB row + remove Storage object.
+app.delete('/api/recordings/:id', requireUser, async (req, res) => {
+  if (!requireDb(res)) return;
+  if (!requireRecordingStorage(res)) return;
+
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id < 1) {
+      return res.status(400).json({ ok: false, message: 'ID recording tidak valid.' });
+    }
+
+    const r = await db.query(
+      `SELECT id,storage_path
+         FROM voice_messages
+        WHERE id=$1
+          AND sender_id=$2
+          AND deleted_at IS NULL
+        LIMIT 1`,
+      [id, req.user.id]
+    );
+
+    const row = r.rows[0];
+    if (!row) {
+      return res.status(404).json({
+        ok: false,
+        message: 'Recording tidak ditemukan atau bukan milik Anda.'
+      });
+    }
+
+    const removed = await supabaseAdmin.storage
+      .from(RECORDING_BUCKET)
+      .remove([row.storage_path]);
+
+    if (removed.error) {
+      console.error('[RECORDING] STORAGE DELETE ERROR:', removed.error.message);
+      return res.status(502).json({
+        ok: false,
+        message: 'Gagal menghapus file recording dari Storage.'
+      });
+    }
+
+    await db.query(
+      `UPDATE voice_messages
+          SET deleted_at=NOW()
+        WHERE id=$1
+          AND sender_id=$2
+          AND deleted_at IS NULL`,
+      [id, req.user.id]
+    );
+
+    console.log('[RECORDING] DELETED:', req.user.username, id);
+
+    return res.json({ ok: true, id });
+  } catch (e) {
+    console.error('[RECORDING] DELETE ERROR:', e.message);
+    return res.status(500).json({
+      ok: false,
+      message: 'Gagal menghapus recording.'
+    });
+  }
+});
+
+async function cleanupExpiredRecordings() {
+  if (!db || !supabaseAdmin) return;
+
+  try {
+    const r = await db.query(
+      `SELECT id,storage_path
+         FROM voice_messages
+        WHERE expires_at<=NOW()
+          AND deleted_at IS NULL
+        ORDER BY expires_at ASC
+        LIMIT 100`
+    );
+
+    for (const row of r.rows) {
+      try {
+        await supabaseAdmin.storage
+          .from(RECORDING_BUCKET)
+          .remove([row.storage_path]);
+      } catch (storageError) {
+        console.error(
+          '[RECORDING] CLEANUP STORAGE ERROR:',
+          row.id,
+          storageError.message
+        );
+      }
+
+      await db.query(
+        `UPDATE voice_messages
+            SET deleted_at=NOW()
+          WHERE id=$1
+            AND deleted_at IS NULL`,
+        [row.id]
+      );
+    }
+
+    if (r.rows.length) {
+      console.log('[RECORDING] Expired recordings cleaned:', r.rows.length);
+    }
+  } catch (e) {
+    console.error('[RECORDING] CLEANUP ERROR:', e.message);
+  }
+}
+
+if (recordingStorageReady()) {
+  console.log(
+    `[RECORDING] Supabase Storage ready. bucket=${RECORDING_BUCKET}, ` +
+    `maxSize=${RECORDING_MAX_SIZE_BYTES}, maxDurationMs=${RECORDING_MAX_DURATION_MS}, ` +
+    `ttlDays=${RECORDING_TTL_DAYS}`
+  );
+} else {
+  console.warn(
+    '[RECORDING] Supabase Storage belum dikonfigurasi. ' +
+    'Set SUPABASE_URL dan SUPABASE_SERVICE_ROLE_KEY di Railway Variables.'
+  );
+}
+
 // ===== SOCKET AUTH HARDENING (A1.4) =====
 // Authentication is completed BEFORE the connection handler runs, removing the
 // race where room:join could arrive before asynchronous token validation.
@@ -457,7 +1015,7 @@ io.on('connection',socket=>{
   if(socketUser){
     socket.emit('auth:ready',{ok:true,user:publicUser(socketUser)});
   }
-  console.log('[SOCKET] Connected:',socket.id); socket.emit('server:ready',{version:'2.4.1-E-A1.5',transport:socket.conn.transport.name});
+  console.log('[SOCKET] Connected:',socket.id); socket.emit('server:ready',{version:SERVER_VERSION,transport:socket.conn.transport.name});
   socket.on('room:join',async payload=>{try{
     const namaPayload=String(payload?.nama||'').trim(),group=String(payload?.group||'').trim(),channel=String(payload?.channel||'').trim(),peerId=String(payload?.peerId||'').trim(),maxUsers=Number(payload?.maxUsers||0);
     if(!namaPayload||!group||!channel||!peerId)return socket.emit('room:error',{message:'Data room tidak lengkap.'});
@@ -489,7 +1047,12 @@ io.on('connection',socket=>{
   });
   socket.on('disconnect',async reason=>{const s=sessions.get(socket.id);console.log('[SOCKET] Disconnect:',socket.id,reason);if(!s)return;rooms.get(s.room)?.delete(socket.id);if(rooms.get(s.room)?.size===0)rooms.delete(s.room);sessions.delete(socket.id);await removePresence(socket.id);if(s.room)io.to(s.room).emit('room:users',roomUsers(s.room));emitPresence();});
 });
+setInterval(cleanupExpiredRecordings, 15 * 60 * 1000);
+
 setInterval(async()=>{const cutoff=Date.now()-65000;for(const[id,s]of sessions)if(s.timestamp<cutoff){rooms.get(s.room)?.delete(id);sessions.delete(id);await removePresence(id);}emitPresence();},15000);
 
-async function startServer(){console.log('========================================');console.log(' Komunikasi Group V2 Backend');console.log(' Version 2.4.1-E / A1.5');console.log('========================================');await testDatabase();await initializeDatabase();server.listen(PORT,()=>{console.log(`[SERVER] Listening on port ${PORT}`);console.log(`[SERVER] PostgreSQL: ${db?'ENABLED':'DISABLED'}`);});}
+async function startServer(){console.log('========================================');console.log(' Komunikasi Group V2 Backend');console.log(` Version ${SERVER_VERSION}`);console.log('========================================');await testDatabase();await initializeDatabase();server.listen(PORT,()=>{console.log(`[SERVER] Listening on port ${PORT}`);console.log(`[SERVER] PostgreSQL: ${db?'ENABLED':'DISABLED'}`);});}
 startServer();
+
+
+--- END server.js ---
