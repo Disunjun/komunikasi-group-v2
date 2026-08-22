@@ -2599,18 +2599,26 @@ async function toggleRecordChannel() {
         updateRecordingUI("channel");
         startRecordingTimer();
         
-        // 3. Pantau jika ada user baru masuk saat rekaman berjalan
-        const audioObserver = new MutationObserver(mutations => {
-            if(!recordChannelActive) return;
-            mutations.forEach(mutation => {
-                mutation.addedNodes.forEach(node => {
-                    if(node.tagName === 'AUDIO' && node.srcObject) {
-                        // Connect segera, jangan delay
-                        setTimeout(() => connectAudioElementToRecorder(node), 50);
+ // 3. Pantau jika ada user baru masuk saat rekaman berjalan
+ const audioObserver = new MutationObserver(mutations => {
+    if(!recordChannelActive) return;
+    mutations.forEach(mutation => {
+        mutation.addedNodes.forEach(node => {
+            if(node.tagName === 'AUDIO') {
+                console.log("[REC] 🎵 Audio element terdeteksi:", node.id);
+                // Tunggu srcObject siap
+                setTimeout(() => {
+                    if(node.srcObject) {
+                        connectAudioElementToRecorder(node);
+                    } else {
+                        // Retry jika belum siap
+                        setTimeout(() => connectAudioElementToRecorder(node), 500);
                     }
-                });
-            });
+                }, 300);
+            }
         });
+    });
+});
         audioObserver.observe(document.body, { childList: true, subtree: true });
         window.__recAudioObserver = audioObserver;
         
