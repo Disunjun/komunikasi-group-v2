@@ -358,6 +358,15 @@
         .network-speed.slow { color: #f59e0b; }
         .network-speed.bad { color: #ef4444; }
 
+        /* Connection status improvements */
+        .status { padding: 10px 14px; border-radius: 8px; margin-bottom:10px; font-weight:bold; font-size:14px; line-height:1.5; transition: all 0.3s ease; }
+        .status-kuning { background:var(--status-kuning); color: var(--text); border-left: 4px solid #ca8a04; }
+        .status-hijau { background:var(--status-hijau); color: var(--text); border-left: 4px solid #16a34a; }
+        .status-merah { background:var(--status-merah); color: var(--text); border-left: 4px solid #dc2626; }
+        .status-biru { background:var(--status-biru); color: var(--text); border-left: 4px solid #2563eb; }
+        .status-abu { background:var(--status-abu); color: var(--text); border-left: 4px solid #475569; }
+        .status-ungu { background:var(--status-ungu); color: var(--text); border-left: 4px solid #9333ea; }
+
 
         /* Channel Recording */
         .recording-panel { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 12px; margin: 10px 0; }
@@ -380,7 +389,74 @@
         ::-webkit-scrollbar-track { background: #0f172a; }
         ::-webkit-scrollbar-thumb { background: #475569; border-radius: 4px; }
         ::-webkit-scrollbar-thumb:hover { background: #64748b; }
-    </style>
+    
+        /* ========== FLOATING DEBUG BUTTON & PANEL ========== */
+        #debugFab {
+            position: fixed;
+            right: 14px;
+            bottom: 14px;
+            width: 46px;
+            height: 46px;
+            border-radius: 50%;
+            border: 1px solid #475569;
+            background: #0f172a;
+            color: #22c55e;
+            font-size: 19px;
+            font-weight: 800;
+            cursor: pointer;
+            z-index: 9998;
+            box-shadow: 0 6px 20px rgba(0,0,0,.45);
+            -webkit-tap-highlight-color: transparent;
+        }
+        #debugFab:active { transform: scale(.94); }
+        #debugPanel {
+            display: none;
+            position: fixed;
+            right: 12px;
+            bottom: 70px;
+            width: min(390px, calc(100vw - 24px));
+            max-height: 72vh;
+            overflow: auto;
+            z-index: 9999;
+            background: #0b1220;
+            color: #e2e8f0;
+            border: 1px solid #334155;
+            border-radius: 14px;
+            box-shadow: 0 12px 35px rgba(0,0,0,.55);
+            padding: 12px;
+            text-align: left;
+        }
+        #debugPanel.aktif { display: block; }
+        .debug-head {
+            display:flex;
+            align-items:center;
+            justify-content:space-between;
+            gap:8px;
+            margin-bottom:10px;
+        }
+        .debug-head strong { color:#22c55e; }
+        .debug-actions { display:flex; gap:6px; }
+        .debug-mini-btn {
+            border:1px solid #475569;
+            background:#1e293b;
+            color:#fff;
+            border-radius:8px;
+            padding:6px 9px;
+            font-size:12px;
+            cursor:pointer;
+        }
+        #debugOutput {
+            margin:0;
+            white-space:pre-wrap;
+            word-break:break-word;
+            font:12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            color:#cbd5e1;
+        }
+        .debug-ok { color:#22c55e; }
+        .debug-bad { color:#ef4444; }
+
+</style>
+<base target="_blank">
 </head>
 <body>
 <div class="theme-toggle" id="themeToggle" onclick="toggleTheme()" title="Ganti Tema">🌙</div>
@@ -402,7 +478,7 @@
             <input type="text" id="loginNama" placeholder="Nama Lengkap">
             <input type="password" id="loginPass" placeholder="Kata Sandi">
             <button class="btn" onclick="masukSistem()">Masuk</button>
-            <div class="petunjuk" style="margin-top:8px;">Masuk sebagai <b>Didik Suntoro</b> dengan sandi <b>123456</b> untuk akses Admin</div>
+            <div class="petunjuk" style="margin-top:8px;">Berkomunikasi Dengan Bijak</div>
         </div>
     </div>
 
@@ -806,13 +882,13 @@
 
     <!-- Toast Container -->
     <div class="toast-container" id="toastContainer"></div>
-
 <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+<script src="https://cdn.socket.io/4.8.1/socket.io.min.js"></script>
 <script>
 
 // ========== KONFIGURASI & STATE ==========
 const ADMIN_NAMA = "Didik Suntoro";
-const ADMIN_PASS = "123456";
+const ADMIN_PASS = "D1d1kSunt0r0@#$";
 let namaSaya = "", channelAktif = "", grupAktif = "", peer = null, koneksi = {}, streamSaya = null;
 let micAktif = true;
 let daftarNamaTerhubung = [];
@@ -835,10 +911,31 @@ let destinationNode = null;
 let mixedStream = null;
 let adminTabAktif = 'users';
 let editUserTarget = null;
+let serverUsers = []; // PostgreSQL-backed user cache (admin UI only)
 let editGroupTarget = null;
 let editChannelTarget = { grupIdx: -1, chIdx: -1 };
 let heartbeatInterval = null;
 let monitoringInterval = null;
+
+// ========== REALTIME SERVER V2 ==========
+const REALTIME_SERVER_URL = window.REALTIME_SERVER_URL || "https://komunikasi-group-v2-production.up.railway.app";
+let socket = null;
+let serverSessions = {};
+let peerIdSaya = null;
+let realtimeConnected = false;
+
+// ========== PEERJS RECONNECT STATE (GLOBAL) ==========
+// Harus global karena dipakai saat masuk channel, reconnect, dan keluarChannel().
+let currentServerIndex = 0;
+let peerReconnectAttempts = 0;
+const MAX_RECONNECT_ATTEMPTS = 5;
+let peerReconnectTimer = null;
+
+// Peer-to-peer connection lifecycle state.
+// Mencegah koneksi ganda dan memungkinkan retry jika DataConnection macet/gagal.
+const peerConnecting = new Set();
+const peerConnectTimers = new Map();
+const PEER_CONNECT_TIMEOUT_MS = 10000;
 
 // ========== LOCALSTORAGE HELPERS ==========
 function ambilData(kunci) { 
@@ -958,61 +1055,57 @@ function keluarSistem() {
 }
 function kembaliKeMasuk() { tampilHalaman("halamanMasuk"); }
 
-// ========== AUTH & LOGIN ==========
-function daftarAkun() {
+// ========== AUTH & LOGIN (POSTGRESQL) ==========
+async function apiRequest(path, options = {}, admin = false) {
+    const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
+    if(admin) {
+        headers["x-admin-name"] = ADMIN_NAMA;
+        headers["x-admin-password"] = ADMIN_PASS;
+    }
+    const response = await fetch(`${REALTIME_SERVER_URL}${path}`, { ...options, headers });
+    let data = {};
+    try { data = await response.json(); } catch(_) {}
+    if(!response.ok || data.ok === false) throw new Error(data.message || `HTTP ${response.status}`);
+    return data;
+}
+
+async function daftarAkun() {
     const nama = document.getElementById("regNama").value.trim();
     const sandi = document.getElementById("regPass").value;
-
     if(!nama || !sandi) return toast("❌ Isi Nama dan Kata Sandi terlebih dahulu!", "merah");
     if(nama.length < 2) return toast("❌ Nama minimal 2 karakter!", "merah");
     if(sandi.length < 4) return toast("❌ Kata sandi minimal 4 karakter!", "merah");
-    if(nama.toLowerCase() === ADMIN_NAMA.toLowerCase()) return toast("❌ Nama ini tidak boleh digunakan!", "merah");
-
-    const pengguna = ambilData("logPengguna");
-    const sudahAda = pengguna.some(p => p.nama.toLowerCase() === nama.toLowerCase());
-
-    if(sudahAda) return toast("❌ Nama ini sudah terdaftar! Gunakan nama lain.", "merah");
-
-    pengguna.push({
-        nama: nama, 
-        sandi: sandi,
-        status: "aktif",
-        banned: false,
-        muted: false,
-        dibuatOleh: nama,
-        tanggalDibuat: new Date().toLocaleDateString('id-ID')
-    });
-    if(simpanData("logPengguna", pengguna)) {
-        toast("✅ Berhasil Daftar! Silakan masuk.", "hijau");
+    try {
+        await apiRequest('/api/auth/register', { method:'POST', body:JSON.stringify({nama,sandi}) });
         document.getElementById("regNama").value = "";
         document.getElementById("regPass").value = "";
-    }
+        toast("✅ Berhasil Daftar ke server! Silakan masuk.", "hijau");
+    } catch(err) { toast(`❌ ${err.message}`, "merah"); }
 }
 
-function masukSistem() {
-    namaSaya = document.getElementById("loginNama").value.trim();
+async function masukSistem() {
+    const nama = document.getElementById("loginNama").value.trim();
     const sandi = document.getElementById("loginPass").value;
+    if(!nama || !sandi) return toast("❌ Isi Nama dan Kata Sandi!", "merah");
 
-    if(!namaSaya || !sandi) return toast("❌ Isi Nama dan Kata Sandi!", "merah");
-
-    // Admin login
-    if(namaSaya === ADMIN_NAMA && sandi === ADMIN_PASS) {
+    // Admin UI tetap memakai kredensial admin saat ini; user biasa wajib diverifikasi PostgreSQL.
+    if(nama === ADMIN_NAMA && sandi === ADMIN_PASS) {
+        namaSaya = nama;
         tampilHalaman("halamanAdmin");
         renderAdminPanel();
         toast("Selamat datang, Admin!", "hijau");
         return;
     }
-
-    const pengguna = ambilData("logPengguna");
-    const cocok = pengguna.find(p => p.nama === namaSaya && p.sandi === sandi);
-
-    if(!cocok) return toast("❌ Nama atau Kata Sandi salah!", "merah");
-    if(cocok.banned) return toast("❌ Akun Anda telah di-banned! Hubungi admin.", "merah");
-    if(cocok.status === "nonaktif") return toast("❌ Akun Anda dinonaktifkan! Hubungi admin.", "merah");
-
-    tampilHalaman("halamanDaftar");
-    muatDaftarGrup();
-    toast(`Selamat datang, ${namaSaya}!`, "hijau");
+    try {
+        const data = await apiRequest('/api/auth/login', { method:'POST', body:JSON.stringify({nama,sandi}) });
+        namaSaya = data.user.nama;
+        tampilHalaman("halamanDaftar");
+        muatDaftarGrup();
+        toast(`Selamat datang, ${namaSaya}!`, "hijau");
+    } catch(err) {
+        namaSaya = "";
+        toast(`❌ ${err.message}`, "merah");
+    }
 }
 
 // ========== LOG FUNCTIONS ==========
@@ -1168,7 +1261,7 @@ function pilihTab(tab) {
 }
 
 function updateStats() {
-    const users = ambilData("logPengguna");
+    const users = serverUsers;
     const grup = ambilData("daftarGrup");
     const sessions = ambilData("onlineSessions");
     const now = Date.now();
@@ -1521,165 +1614,84 @@ function renderAdminPanel() {
     if(adminTabAktif === 'monitoring') refreshMonitoring();
 }
 
-// ========== USERS MANAGEMENT ==========
-function renderUsers() {
+// ========== USERS MANAGEMENT (POSTGRESQL) ==========
+async function loadServerUsers() {
+    const data = await apiRequest('/api/users', { method:'GET' }, true);
+    serverUsers = data.users || [];
+    return serverUsers;
+}
+
+async function renderUsers() {
     const tbody = document.getElementById("tabelUsers");
-    const users = ambilData("logPengguna");
-    if(users.length === 0) {
+    if(!tbody) return;
+    tbody.innerHTML = `<tr><td colspan="7">Memuat user dari PostgreSQL...</td></tr>`;
+    try { await loadServerUsers(); }
+    catch(err) { tbody.innerHTML = `<tr><td colspan="7" class="empty-state">❌ ${err.message}</td></tr>`; return; }
+    if(serverUsers.length === 0) {
         tbody.innerHTML = `<tr><td colspan="7" class="empty-state"><div class="empty-state-icon">👤</div>Belum ada pengguna</td></tr>`;
         return;
     }
-    tbody.innerHTML = users.map((u, i) => {
+    tbody.innerHTML = serverUsers.map((u, i) => {
         const statusBadge = u.status === "aktif" ? '<span class="badge badge-aktif">AKTIF</span>' : '<span class="badge badge-nonaktif">NONAKTIF</span>';
         const bannedBadge = u.banned ? '<span class="badge badge-banned">BANNED</span>' : '<span class="badge badge-aktif">-</span>';
         const mutedBadge = u.muted ? '<span class="badge badge-muted">MUTED</span>' : '<span class="badge badge-aktif">-</span>';
-        const isAdmin = u.nama === ADMIN_NAMA;
+        const isAdmin = u.role === 'admin' || u.nama === ADMIN_NAMA;
         const disabled = isAdmin ? 'disabled' : '';
         return `<tr>
             <td><b>${u.nama}</b> ${isAdmin ? '<span class="admin-badge">ADMIN</span>' : ''}</td>
-            <td>${statusBadge}</td>
-            <td>${bannedBadge}</td>
-            <td>${mutedBadge}</td>
-            <td>${u.dibuatOleh || '-'}</td>
-            <td>${u.tanggalDibuat || '-'}</td>
-            <td>
-                <div class="aksi-btns">
-                    <button class="btn btn-sm" onclick="bukaEditUser(${i})" ${disabled}>Edit</button>
-                    <button class="btn btn-sm btn-kuning" onclick="bukaResetPass(${i})" ${disabled}>Reset Pass</button>
-                    <button class="btn btn-sm ${u.status==='aktif'?'btn-merah':'btn-hijau'}" onclick="toggleUserStatus(${i})" ${disabled}>${u.status==='aktif'?'Nonaktifkan':'Aktifkan'}</button>
-                    <button class="btn btn-sm ${u.banned?'btn-hijau':'btn-merah'}" onclick="toggleUserBan(${i})" ${disabled}>${u.banned?'Unban':'Ban'}</button>
-                    <button class="btn btn-sm ${u.muted?'btn-hijau':'btn-kuning'}" onclick="toggleUserMute(${i})" ${disabled}>${u.muted?'Unmute':'Mute'}</button>
-                    <button class="btn btn-sm btn-merah" onclick="kickUser('${u.nama}')" ${disabled}>Kick</button>
-                    <button class="btn btn-sm btn-merah" onclick="hapusUser(${i})" ${disabled}>Hapus</button>
-                </div>
-            </td>
-        </tr>`;
+            <td>${statusBadge}</td><td>${bannedBadge}</td><td>${mutedBadge}</td>
+            <td>${u.dibuatOleh || '-'}</td><td>${u.tanggalDibuat || '-'}</td>
+            <td><div class="aksi-btns">
+                <button class="btn btn-sm" onclick="bukaEditUser(${i})" ${disabled}>Edit</button>
+                <button class="btn btn-sm btn-kuning" onclick="bukaResetPass(${i})" ${disabled}>Reset Pass</button>
+                <button class="btn btn-sm ${u.status==='aktif'?'btn-merah':'btn-hijau'}" onclick="toggleUserStatus(${i})" ${disabled}>${u.status==='aktif'?'Nonaktifkan':'Aktifkan'}</button>
+                <button class="btn btn-sm ${u.banned?'btn-hijau':'btn-merah'}" onclick="toggleUserBan(${i})" ${disabled}>${u.banned?'Unban':'Ban'}</button>
+                <button class="btn btn-sm ${u.muted?'btn-hijau':'btn-kuning'}" onclick="toggleUserMute(${i})" ${disabled}>${u.muted?'Unmute':'Mute'}</button>
+                <button class="btn btn-sm btn-merah" onclick="kickUser('${u.nama.replace(/'/g,"\\'")}')" ${disabled}>Kick</button>
+                <button class="btn btn-sm btn-merah" onclick="hapusUser(${i})" ${disabled}>Hapus</button>
+            </div></td></tr>`;
     }).join('');
     updateStats();
 }
 
-function simpanUserBaru() {
-    const nama = document.getElementById("modalNamaUser").value.trim();
-    const sandi = document.getElementById("modalPassUser").value;
+async function simpanUserBaru() {
+    const nama=document.getElementById("modalNamaUser").value.trim(), sandi=document.getElementById("modalPassUser").value;
     if(!nama || !sandi) return toast("Isi nama dan password!", "merah");
-    if(nama.length < 2) return toast("Nama minimal 2 karakter!", "merah");
-    if(sandi.length < 4) return toast("Password minimal 4 karakter!", "merah");
-
-    const users = ambilData("logPengguna");
-    if(users.some(u => u.nama.toLowerCase() === nama.toLowerCase())) return toast("Nama sudah terdaftar!", "merah");
-
-    users.push({
-        nama, sandi,
-        status: "aktif",
-        banned: false,
-        muted: false,
-        dibuatOleh: ADMIN_NAMA,
-        tanggalDibuat: new Date().toLocaleDateString('id-ID')
-    });
-    simpanData("logPengguna", users);
-    catatAudit("BUAT USER", nama, `dibuat oleh admin`);
-    tutupModal('modalBuatUser');
-    renderUsers();
-    toast(`User "${nama}" berhasil dibuat!`, "hijau");
+    try {
+        await apiRequest('/api/users',{method:'POST',body:JSON.stringify({nama,sandi})},true);
+        catatAudit("BUAT USER",nama,"disimpan ke PostgreSQL");
+        tutupModal('modalBuatUser'); await renderUsers();
+        toast(`User "${nama}" berhasil dibuat di server!`,"hijau");
+    } catch(err){ toast(`❌ ${err.message}`,"merah"); }
 }
-
 function bukaEditUser(idx) {
-    const users = ambilData("logPengguna");
-    const u = users[idx];
-    editUserTarget = idx;
-    document.getElementById("editUserNama").value = u.nama;
-    document.getElementById("editUserStatus").value = u.status;
-    document.getElementById("editUserBanned").value = u.banned ? "true" : "false";
-    document.getElementById("editUserMuted").value = u.muted ? "true" : "false";
+    const u=serverUsers[idx]; if(!u) return;
+    editUserTarget=idx;
+    document.getElementById("editUserNama").value=u.nama;
+    document.getElementById("editUserStatus").value=u.status;
+    document.getElementById("editUserBanned").value=u.banned?"true":"false";
+    document.getElementById("editUserMuted").value=u.muted?"true":"false";
     bukaModal('modalEditUser');
 }
-function simpanEditUser() {
-    const users = ambilData("logPengguna");
-    if(editUserTarget === null) return;
-    users[editUserTarget].status = document.getElementById("editUserStatus").value;
-    users[editUserTarget].banned = document.getElementById("editUserBanned").value === "true";
-    users[editUserTarget].muted = document.getElementById("editUserMuted").value === "true";
-    simpanData("logPengguna", users);
-    catatAudit("EDIT USER", users[editUserTarget].nama, `status=${users[editUserTarget].status}, banned=${users[editUserTarget].banned}, muted=${users[editUserTarget].muted}`);
-    tutupModal('modalEditUser');
-    renderUsers();
-    toast("User berhasil diperbarui!", "hijau");
+async function simpanEditUser() {
+    const u=serverUsers[editUserTarget]; if(!u) return;
+    const patch={status:document.getElementById("editUserStatus").value,banned:document.getElementById("editUserBanned").value==="true",muted:document.getElementById("editUserMuted").value==="true"};
+    try { await apiRequest(`/api/users/${u.id}`,{method:'PATCH',body:JSON.stringify(patch)},true); catatAudit("EDIT USER",u.nama,JSON.stringify(patch)); tutupModal('modalEditUser'); await renderUsers(); toast("User berhasil diperbarui di server!","hijau"); }
+    catch(err){toast(`❌ ${err.message}`,"merah");}
 }
-
-function bukaResetPass(idx) {
-    const users = ambilData("logPengguna");
-    editUserTarget = idx;
-    document.getElementById("resetPassNama").value = users[idx].nama;
-    document.getElementById("resetPassBaru").value = "";
-    bukaModal('modalResetPass');
+function bukaResetPass(idx) { const u=serverUsers[idx]; if(!u)return; editUserTarget=idx; document.getElementById("resetPassNama").value=u.nama; document.getElementById("resetPassBaru").value=""; bukaModal('modalResetPass'); }
+async function simpanResetPass() {
+    const pass=document.getElementById("resetPassBaru").value, u=serverUsers[editUserTarget];
+    if(!u || pass.length<4) return toast("Password minimal 4 karakter!","merah");
+    try { await apiRequest(`/api/users/${u.id}/password`,{method:'PATCH',body:JSON.stringify({sandi:pass})},true); catatAudit("RESET PASSWORD",u.nama,"password di-reset di PostgreSQL"); tutupModal('modalResetPass'); toast("Password berhasil direset!","hijau"); }
+    catch(err){toast(`❌ ${err.message}`,"merah");}
 }
-function simpanResetPass() {
-    const pass = document.getElementById("resetPassBaru").value;
-    if(!pass || pass.length < 4) return toast("Password minimal 4 karakter!", "merah");
-    const users = ambilData("logPengguna");
-    users[editUserTarget].sandi = pass;
-    simpanData("logPengguna", users);
-    catatAudit("RESET PASSWORD", users[editUserTarget].nama, `password di-reset oleh admin`);
-    tutupModal('modalResetPass');
-    renderUsers();
-    toast("Password berhasil direset!", "hijau");
-}
-
-function toggleUserStatus(idx) {
-    const users = ambilData("logPengguna");
-    const u = users[idx];
-    if(u.nama === ADMIN_NAMA) return toast("Tidak bisa mengubah status admin!", "merah");
-    u.status = u.status === "aktif" ? "nonaktif" : "aktif";
-    simpanData("logPengguna", users);
-    catatAudit(u.status === 'aktif' ? 'AKTIFKAN USER' : 'NONAKTIFKAN USER', u.nama, `status diubah menjadi ${u.status}`);
-    renderUsers();
-    toast(`User "${u.nama}" ${u.status === 'aktif' ? 'diaktifkan' : 'dinonaktifkan'}!`, u.status === 'aktif' ? 'hijau' : 'kuning');
-}
-function toggleUserBan(idx) {
-    const users = ambilData("logPengguna");
-    const u = users[idx];
-    if(u.nama === ADMIN_NAMA) return toast("Tidak bisa ban admin!", "merah");
-    u.banned = !u.banned;
-    simpanData("logPengguna", users);
-    catatAudit(u.banned ? 'BAN USER' : 'UNBAN USER', u.nama, `banned=${u.banned}`);
-    renderUsers();
-    toast(`User "${u.nama}" ${u.banned ? 'di-banned' : 'unbanned'}!`, u.banned ? 'merah' : 'hijau');
-}
-function toggleUserMute(idx) {
-    const users = ambilData("logPengguna");
-    const u = users[idx];
-    if(u.nama === ADMIN_NAMA) return toast("Tidak bisa mute admin!", "merah");
-    u.muted = !u.muted;
-    simpanData("logPengguna", users);
-    catatAudit(u.muted ? 'MUTE USER' : 'UNMUTE USER', u.nama, `muted=${u.muted}`);
-    renderUsers();
-    toast(`User "${u.nama}" ${u.muted ? 'di-mute' : 'unmute'}!`, 'kuning');
-}
-function kickUser(nama) {
-    if(nama === ADMIN_NAMA) return toast("Tidak bisa kick admin!", "merah");
-    // Hapus session online
-    const sessions = ambilData("onlineSessions");
-    delete sessions[nama];
-    simpanData("onlineSessions", sessions);
-    // Tambah ke kicked list
-    const kicked = ambilData("kickedUsers");
-    kicked.push({ nama, kickedAt: Date.now(), kickedBy: ADMIN_NAMA });
-    simpanData("kickedUsers", kicked);
-    renderUsers();
-    catatAudit("KICK USER", nama, `di-kick oleh admin`);
-    toast(`User "${nama}" telah di-kick!`, "kuning");
-}
-function hapusUser(idx) {
-    const users = ambilData("logPengguna");
-    if(users[idx].nama === ADMIN_NAMA) return toast("Tidak bisa hapus admin!", "merah");
-    if(!confirm(`Yakin hapus user "${users[idx].nama}"?`)) return;
-    const nama = users[idx].nama;
-    users.splice(idx, 1);
-    simpanData("logPengguna", users);
-    renderUsers();
-    catatAudit("HAPUS USER", nama, `user dihapus oleh admin`);
-    toast(`User "${nama}" dihapus!`, "merah");
-}
+async function patchUserFlag(idx, patch, auditAction) { const u=serverUsers[idx]; if(!u||u.role==='admin')return; try{await apiRequest(`/api/users/${u.id}`,{method:'PATCH',body:JSON.stringify({...u,...patch})},true);catatAudit(auditAction,u.nama,JSON.stringify(patch));await renderUsers();toast(`User "${u.nama}" diperbarui!`,"hijau");}catch(err){toast(`❌ ${err.message}`,"merah");} }
+function toggleUserStatus(idx){const u=serverUsers[idx];if(u)patchUserFlag(idx,{status:u.status==='aktif'?'nonaktif':'aktif'},u.status==='aktif'?'NONAKTIFKAN USER':'AKTIFKAN USER');}
+function toggleUserBan(idx){const u=serverUsers[idx];if(u)patchUserFlag(idx,{banned:!u.banned},u.banned?'UNBAN USER':'BAN USER');}
+function toggleUserMute(idx){const u=serverUsers[idx];if(u)patchUserFlag(idx,{muted:!u.muted},u.muted?'UNMUTE USER':'MUTE USER');}
+function kickUser(nama) { if(nama===ADMIN_NAMA)return; if(socket?.connected) socket.emit('admin:kick',{nama}); catatAudit("KICK USER",nama,"kick dikirim via Socket.IO"); toast(`Perintah kick untuk "${nama}" dikirim!`,"kuning"); }
+async function hapusUser(idx) { const u=serverUsers[idx];if(!u||u.role==='admin')return;if(!confirm(`Yakin hapus user "${u.nama}"?`))return;try{await apiRequest(`/api/users/${u.id}`,{method:'DELETE'},true);catatAudit("HAPUS USER",u.nama,"dihapus dari PostgreSQL");await renderUsers();toast(`User "${u.nama}" dihapus!`,"merah");}catch(err){toast(`❌ ${err.message}`,"merah");} }
 
 // ========== GROUPS MANAGEMENT ==========
 function renderGroups() {
@@ -1894,7 +1906,7 @@ function hapusChannelAdmin(gi, ci) {
 function refreshMonitoring() {
     const container = document.getElementById("monitoringTree");
     const grup = ambilData("daftarGrup");
-    const sessions = ambilData("onlineSessions");
+    const sessions = Object.keys(serverSessions).length ? serverSessions : ambilData("onlineSessions");
     const now = Date.now();
     const kicked = ambilData("kickedUsers");
 
@@ -1968,15 +1980,169 @@ function bersihkanSession() {
 // ========== HEARTBEAT SYSTEM ==========
 function startHeartbeat() {
     if(heartbeatInterval) clearInterval(heartbeatInterval);
-    updateHeartbeat(); // first call
+    updateHeartbeat();
     heartbeatInterval = setInterval(updateHeartbeat, 10000);
 }
 function stopHeartbeat() {
     if(heartbeatInterval) { clearInterval(heartbeatInterval); heartbeatInterval = null; }
-    // Hapus session sendiri
+    if(socket && realtimeConnected) socket.emit("presence:update", { micStatus:false, floorStatus:"idle" });
     const sessions = ambilData("onlineSessions");
     delete sessions[namaSaya];
     simpanData("onlineSessions", sessions);
+}
+
+function initRealtimeSocket() {
+    if(socket) { try { socket.disconnect(); } catch(e) {} }
+    if(!REALTIME_SERVER_URL || REALTIME_SERVER_URL.includes("YOUR-BACKEND")) {
+        document.getElementById("statusKoneksi").className = "status status-merah";
+        document.getElementById("statusKoneksi").innerHTML = "❌ <b>Backend belum dikonfigurasi.</b> Isi REALTIME_SERVER_URL.";
+        toast("⚠️ URL backend realtime belum diatur.", "merah", 7000);
+        return false;
+    }
+    socket = io(REALTIME_SERVER_URL, { transports:["websocket","polling"], reconnection:true, timeout:8000 });
+    socket.on("connect", () => { realtimeConnected = true; if(peerIdSaya) joinRealtimeRoom(); });
+    socket.on("disconnect", () => { realtimeConnected = false; });
+    socket.on("server:ready", data => console.log("Realtime server ready", data));
+    socket.on("room:joined", data => {
+        serverSessions = Object.fromEntries((data.users || []).map(u => [u.nama, u]));
+        daftarNamaTerhubung = (data.users || []).map(u => u.nama);
+        if(!daftarNamaTerhubung.includes(namaSaya)) daftarNamaTerhubung.unshift(namaSaya);
+        perbaruiDaftarPengguna();
+        sinkronkanPeerUsers(data.users || []);
+    });
+    socket.on("room:users", users => {
+        serverSessions = Object.fromEntries((users || []).map(u => [u.nama, u]));
+        daftarNamaTerhubung = (users || []).map(u => u.nama);
+        if(!daftarNamaTerhubung.includes(namaSaya)) daftarNamaTerhubung.unshift(namaSaya);
+        perbaruiDaftarPengguna();
+        sinkronkanPeerUsers(users || []);
+    });
+    socket.on("presence:update", sessions => { serverSessions = sessions || {}; refreshMonitoring(); });
+    socket.on("room:error", e => toast("❌ " + (e?.message || "Gagal masuk room"), "merah", 6000));
+    socket.on("admin:kick", () => { toast("Anda telah di-kick oleh admin!", "merah", 5000); keluarChannel(); });
+    socket.on("floor:event", receiveFloorState);
+    return true;
+}
+function joinRealtimeRoom() {
+    if(!socket || !realtimeConnected || !peerIdSaya) return;
+    const grup = ambilData("daftarGrup").find(g => g.nama === grupAktif);
+    const ch = grup?.channel?.find(c => c.nama === channelAktif);
+    socket.emit("room:join", { nama:namaSaya, group:grupAktif, channel:channelAktif, peerId:peerIdSaya, maxUsers:ch?.maxUsers || 0 });
+}
+function syncPresenceToServer() {
+    if(socket && realtimeConnected) socket.emit("presence:update", { micStatus:micAktif, floorStatus:myFloorStatus });
+}
+function sinkronkanPeerUsers(users) {
+    if(!peer || peer.destroyed || !peer.open || !streamSaya) return;
+
+    const activePeerIds = new Set(
+        (users || [])
+            .map(u => u?.peerId)
+            .filter(id => id && id !== peerIdSaya)
+    );
+
+    // Bersihkan koneksi stale: peer sudah tidak ada di room.
+    Object.keys(koneksi).forEach(peerId => {
+        if(!activePeerIds.has(peerId)) {
+            try { koneksi[peerId]?.close(); } catch(e) {}
+            delete koneksi[peerId];
+            peerConnecting.delete(peerId);
+            if(peerConnectTimers.has(peerId)) {
+                clearTimeout(peerConnectTimers.get(peerId));
+                peerConnectTimers.delete(peerId);
+            }
+        }
+    });
+
+    (users || []).forEach(u => {
+        const targetPeerId = u?.peerId;
+        if(!targetPeerId || targetPeerId === peerIdSaya) return;
+
+        // Koneksi yang benar-benar OPEN dipertahankan.
+        if(koneksi[targetPeerId]?.open) return;
+
+        // Jika object lama ada tetapi tidak pernah OPEN, buang agar dapat retry.
+        if(koneksi[targetPeerId] && !koneksi[targetPeerId].open && !peerConnecting.has(targetPeerId)) {
+            try { koneksi[targetPeerId].close(); } catch(e) {}
+            delete koneksi[targetPeerId];
+        }
+
+        // Jangan membuat beberapa koneksi paralel ke peer yang sama.
+        if(peerConnecting.has(targetPeerId)) return;
+        peerConnecting.add(targetPeerId);
+
+        try {
+            console.log('[PEER] Connecting to', u.nama, targetPeerId);
+            const conn = peer.connect(targetPeerId, {
+                reliable: true,
+                metadata: { nama: namaSaya }
+            });
+
+            if(!conn) {
+                peerConnecting.delete(targetPeerId);
+                return;
+            }
+
+            koneksi[targetPeerId] = conn;
+
+            const clearConnectState = () => {
+                peerConnecting.delete(targetPeerId);
+                if(peerConnectTimers.has(targetPeerId)) {
+                    clearTimeout(peerConnectTimers.get(targetPeerId));
+                    peerConnectTimers.delete(targetPeerId);
+                }
+            };
+
+            const timer = setTimeout(() => {
+                if(!conn.open) {
+                    console.warn('[PEER] Connect timeout:', u.nama, targetPeerId);
+                    try { conn.close(); } catch(e) {}
+                    if(koneksi[targetPeerId] === conn) delete koneksi[targetPeerId];
+                    clearConnectState();
+                }
+            }, PEER_CONNECT_TIMEOUT_MS);
+            peerConnectTimers.set(targetPeerId, timer);
+
+            conn.on('open', () => {
+                clearConnectState();
+                koneksi[targetPeerId] = conn;
+                aturKoneksi(conn);
+                try { conn.send({ jenis:'laporNama', nama:namaSaya }); } catch(e) {}
+                perbaruiStatusTerhubung();
+                console.log('[PEER] Data OPEN:', u.nama, targetPeerId);
+
+                // Mulai media call setelah data channel benar-benar terbuka.
+                // Ini menghindari call berulang setiap room:users saat data peer belum siap.
+                try {
+                    const call = peer.call(targetPeerId, streamSaya, { metadata:{nama:namaSaya} });
+                    if(call) pasangSuara(call);
+                } catch(e) {
+                    console.warn('[PEER] Media call failed:', u.nama, targetPeerId, e);
+                }
+            });
+
+            conn.on('error', err => {
+                console.warn('[PEER] Data error:', u.nama, targetPeerId, err);
+                clearConnectState();
+                if(koneksi[targetPeerId] === conn) delete koneksi[targetPeerId];
+            });
+
+            conn.on('close', () => {
+                console.log('[PEER] Data closed:', u.nama, targetPeerId);
+                clearConnectState();
+                if(koneksi[targetPeerId] === conn) delete koneksi[targetPeerId];
+            });
+
+        } catch(e) {
+            peerConnecting.delete(targetPeerId);
+            if(peerConnectTimers.has(targetPeerId)) {
+                clearTimeout(peerConnectTimers.get(targetPeerId));
+                peerConnectTimers.delete(targetPeerId);
+            }
+            delete koneksi[targetPeerId];
+            console.warn('[PEER] Connect failed:', u.nama, targetPeerId, e);
+        }
+    });
 }
 
 // ========== NETWORK SPEED ==========
@@ -2213,16 +2379,20 @@ function updateNetworkSpeed() {
     // Method 1: navigator.connection API (Chrome/Android)
     const conn = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
     if(conn && conn.downlink) {
-        const kbps = Math.round(conn.downlink * 1024); // Mbps → kbps
+        const kbps = Math.round(conn.downlink * 1024);
         displayNetworkSpeed(kbps);
         return;
     }
 
     // Method 2: Measure with fetch timing
     measureNetworkSpeed().then(kbps => {
-        if(kbps !== null) displayNetworkSpeed(kbps);
+        if(kbps !== null && kbps !== undefined) {
+            displayNetworkSpeed(kbps);
+        } else {
+            displayNetworkSpeed(null);
+        }
     }).catch(() => {
-        el.textContent = "📡 Network: -- kb/s";
+        displayNetworkSpeed(null);
     });
 }
 
@@ -2231,44 +2401,57 @@ function displayNetworkSpeed(kbps) {
     if(!el) return;
     lastNetSpeed = kbps;
     let colorClass = "";
-    if(kbps < 100) colorClass = "bad";
-    else if(kbps < 500) colorClass = "slow";
+    let statusText = "";
+
+    if(kbps === null || kbps === undefined) {
+        el.className = "network-speed";
+        el.textContent = "📡 Network: -- kb/s";
+        return;
+    }
+
+    if(kbps < 100) { colorClass = "bad"; statusText = " (lemah)"; }
+    else if(kbps < 500) { colorClass = "slow"; statusText = " (sedang)"; }
+    else { statusText = " (baik)"; }
+
     el.className = "network-speed " + colorClass;
-    el.textContent = `📡 Network: ${kbps} kb/s`;
+    el.textContent = `📡 Network: ${kbps} kb/s${statusText}`;
 }
 
 async function measureNetworkSpeed() {
     try {
+        // Gunakan data URI kecil untuk mengukur kecepatan lokal, tidak bergantung pada server eksternal
+        const testData = 'data:text/plain;base64,' + 'a'.repeat(1000); // ~1KB data
         const start = performance.now();
-        // Fetch a tiny data from the PeerJS server or use a data URI
-        const response = await fetch('https://peerjs-server-production-9f98.up.railway.app/');
+        const response = await fetch(testData, { cache: 'no-store' });
+        await response.text();
         const end = performance.now();
-        const duration = (end - start) / 1000; // seconds
-        const sizeKB = 2; // approximate response size in KB
-        const kbps = Math.round(sizeKB / duration);
+        const duration = (end - start) / 1000;
+        const sizeKB = 1;
+        const kbps = Math.round(sizeKB / Math.max(duration, 0.001));
+
+        // Juga cek navigator.connection API
+        const conn = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+        if (conn && conn.downlink) {
+            const apiKbps = Math.round(conn.downlink * 1024);
+            return Math.max(kbps, apiKbps);
+        }
+
         return kbps > 0 ? kbps : null;
     } catch(e) {
+        // Fallback ke navigator.connection
+        const conn = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+        if (conn && conn.downlink) {
+            return Math.round(conn.downlink * 1024);
+        }
         return null;
     }
 }
 
 function updateHeartbeat() {
     if(!namaSaya || !channelAktif || !grupAktif) return;
-    // Cek kicked
-    const kicked = ambilData("kickedUsers");
-    if(kicked.some(k => k.nama === namaSaya && Date.now() - k.kickedAt < 300000)) {
-        toast("Anda telah di-kick oleh admin!", "merah");
-        keluarChannel();
-        return;
-    }
+    syncPresenceToServer();
     const sessions = ambilData("onlineSessions");
-    sessions[namaSaya] = {
-        channel: channelAktif,
-        group: grupAktif,
-        micStatus: micAktif,
-        floorStatus: myFloorStatus,
-        timestamp: Date.now()
-    };
+    sessions[namaSaya] = { channel:channelAktif, group:grupAktif, micStatus:micAktif, floorStatus:myFloorStatus, timestamp:Date.now() };
     simpanData("onlineSessions", sessions);
 }
 
@@ -2324,19 +2507,31 @@ function muatDaftarGrup() {
 }
 
 // ========== MASUK CHANNEL ==========
-function masukChannel(namaGrup, namaChannel) {
+async function masukChannel(namaGrup, namaChannel) {
     const grup = ambilData("daftarGrup");
     const g = grup.find(x => x.nama === namaGrup);
     if(!g) return toast("Grup tidak ditemukan!", "merah");
     const c = g.channel.find(x => x.nama === namaChannel);
     if(!c) return toast("Channel tidak ditemukan!", "merah");
 
-    // Cek permission
-    const users = ambilData("logPengguna");
-    const userData = users.find(u => u.nama === namaSaya);
-    if(!userData) return toast("Data user tidak ditemukan!", "merah");
-    if(userData.banned) return toast("Akun Anda di-banned!", "merah");
-    if(userData.status === "nonaktif") return toast("Akun Anda dinonaktifkan!", "merah");
+    // Cek permission dari PostgreSQL, bukan localStorage logPengguna.
+    // Login user sudah memakai PostgreSQL; validasi channel harus memakai sumber data yang sama.
+    let userData = null;
+    if(namaSaya === ADMIN_NAMA) {
+        userData = { nama: ADMIN_NAMA, role: "admin", status: "aktif", banned: false, muted: false };
+    } else {
+        try {
+            const dataUsers = await apiRequest('/api/users', { method:'GET' }, true);
+            const daftarUsers = Array.isArray(dataUsers.users) ? dataUsers.users : [];
+            userData = daftarUsers.find(u => String(u.nama || '').trim().toLowerCase() === String(namaSaya || '').trim().toLowerCase());
+        } catch(err) {
+            console.error('[CHANNEL] Gagal mengambil user PostgreSQL:', err);
+            return toast(`❌ Gagal memverifikasi user: ${err.message}`, "merah");
+        }
+    }
+    if(!userData) return toast(`Data user "${namaSaya}" tidak ditemukan di PostgreSQL!`, "merah");
+    if(userData.banned === true) return toast("Akun Anda di-banned!", "merah");
+    if(String(userData.status || '').toLowerCase() === "nonaktif") return toast("Akun Anda dinonaktifkan!", "merah");
     if(g.status === "nonaktif") return toast("Grup ini dinonaktifkan!", "merah");
     if(c.status === "nonaktif") return toast("Channel ini dinonaktifkan!", "merah");
     if(c.locked) return toast("Channel ini terkunci! Hubungi admin.", "merah");
@@ -2370,15 +2565,9 @@ function masukChannel(namaGrup, namaChannel) {
     }
 
     // Cek MAX USERS
-    if(c.maxUsers && c.maxUsers > 0) {
-        const sessions = ambilData("onlineSessions");
-        const now = Date.now();
-        const usersInChannel = Object.values(sessions).filter(s => 
-            s.channel === namaChannel && s.group === namaGrup && (now - s.timestamp < 60000)
-        ).length;
-        if(usersInChannel >= c.maxUsers) {
-            return toast(`❌ Channel penuh! Maksimal ${c.maxUsers} user. Silakan coba lagi nanti.`, "merah");
-        }
+    if(c.maxUsers && c.maxUsers > 0 && socket && realtimeConnected) {
+        const usersInChannel = Object.values(serverSessions).filter(s => s.channel === namaChannel && s.group === namaGrup).length;
+        if(usersInChannel >= c.maxUsers) return toast(`❌ Channel penuh! Maksimal ${c.maxUsers} user.`, "merah");
     }
 
     // Set PTT timeout untuk channel ini
@@ -2417,71 +2606,171 @@ function masukChannel(namaGrup, namaChannel) {
             streamSaya.getAudioTracks().forEach(track => track.enabled = false);
         }
 
-        peer = new Peer(channelAktif + "-" + namaSaya.replace(/\s/g,"-"), {
-            host: "peerjs-server-production-9f98.up.railway.app",
-            port: 443,
-            path: "/",
-            secure: true,
-            config: {
-                iceServers: [
-                    { urls: "stun:stun.l.google.com:19302" },
-                    { urls: "stun:stun1.l.google.com:19302" },
-                    { urls: "stun:stun2.l.google.com:19302" }
-                ]
+        // Room/presence server dipakai untuk discovery user.
+        initRealtimeSocket();
+
+        // Konfigurasi server PeerJS dengan fallback
+const PEERJS_SERVERS = [
+    {
+        host: "0.peerjs.com",
+        port: 443,
+        path: "/",
+        secure: true,
+        pingInterval: 5000,
+        debug: 2
+    }
+];
+
+
+
+function createPeer() {
+    const serverConfig = PEERJS_SERVERS[currentServerIndex];
+    const peerId = peerIdSaya || ("kg-" + crypto.randomUUID());
+    peerIdSaya = peerId;
+
+    document.getElementById("statusKoneksi").className = "status status-kuning";
+    document.getElementById("statusKoneksi").innerHTML = `🔌 <b>Langkah 1/4:</b> Menghubung ke server ${serverConfig.host}... (coba ${peerReconnectAttempts + 1}/${MAX_RECONNECT_ATTEMPTS})`;
+
+    const config = {
+        ...serverConfig,
+        config: {
+            iceServers: [
+                { urls: "stun:stun.l.google.com:19302" },
+                { urls: "stun:stun1.l.google.com:19302" },
+                { urls: "stun:stun2.l.google.com:19302" },
+                { urls: "stun:stun3.l.google.com:19302" },
+                { urls: "stun:stun4.l.google.com:19302" }
+            ],
+            iceCandidatePoolSize: 10
+        }
+    };
+
+    return new Peer(peerId, config);
+}
+
+function handlePeerError(err) {
+    console.error("PeerJS Error:", err);
+
+    if (err.type === 'network' || err.type === 'socket-error' || err.type === 'server-error' || err.type === 'unavailable-id') {
+        peerReconnectAttempts++;
+
+        if (peerReconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+            // Coba server berikutnya
+            currentServerIndex = (currentServerIndex + 1) % PEERJS_SERVERS.length;
+            peerReconnectAttempts = 0;
+
+            if (currentServerIndex === 0) {
+                // Semua server sudah dicoba
+                document.getElementById("statusKoneksi").className = "status status-merah";
+                document.getElementById("statusKoneksi").innerHTML = `❌ <b>Gagal:</b> Semua server tidak merespons. Coba muat ulang halaman nanti.`;
+                toast("Semua server PeerJS tidak tersedia. Mode offline aktif.", "merah", 5000);
+                return;
             }
-        });
+        }
 
-        peer.on("open", id => {
-            document.getElementById("idSaya").textContent = `🆔 ID Anda: ${id}`;
-            document.getElementById("jumlahPengguna").textContent = `👥 Pengguna: ${daftarNamaTerhubung.length} orang`;
-            document.getElementById("statusKoneksi").className = "status status-biru";
-            document.getElementById("statusKoneksi").innerHTML = "✅ <b>Langkah 2/4:</b> Terdaftar! Sedang mencari rekan...";
-            mulaiCariUlang();
-            perbaruiDaftarPengguna();
-        });
+        document.getElementById("statusKoneksi").className = "status status-kuning";
+        document.getElementById("statusKoneksi").innerHTML = `🔄 <b>Retry:</b> Server gagal, mencoba ${PEERJS_SERVERS[currentServerIndex].host}... (${peerReconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`;
 
-        peer.on("connection", conn => {
-            koneksi[conn.peer] = conn;
-            aturKoneksi(conn);
-            perbaruiStatusTerhubung();
-        });
-
-        peer.on("call", panggilan => {
-            panggilan.answer(streamSaya);
-            pasangSuara(panggilan);
-            perbaruiStatusTerhubung();
-        });
-
-        peer.on("error", err => {
-            console.error("KESALAHAN:", err);
-            document.getElementById("statusKoneksi").className = "status status-merah";
-            document.getElementById("statusKoneksi").innerHTML = `❌ <b>Gagal:</b> ${err.type} — Coba muat ulang halaman`;
-        });
-    })
-    .catch(e => {
+        if (peerReconnectTimer) clearTimeout(peerReconnectTimer);
+        peerReconnectTimer = setTimeout(() => {
+            if (peer) peer.destroy();
+            peer = createPeer();
+            setupPeerEvents();
+        }, 3000);
+    } else if (err.type === 'peer-unavailable') {
+        // Peer lain tidak tersedia, ini normal
+        console.log("Peer unavailable:", err);
+    } else {
         document.getElementById("statusKoneksi").className = "status status-merah";
-        document.getElementById("statusKoneksi").innerHTML = "❌ <b>Izin Ditolak:</b> Izinkan mikrofon agar bisa bicara!";
-        toast("❌ Izin mikrofon WAJIB diberikan agar bisa berbicara!", "merah");
+        document.getElementById("statusKoneksi").innerHTML = `❌ <b>Error:</b> ${err.type} — ${err.message || 'Coba muat ulang halaman'}`;
+    }
+}
+
+function setupPeerEvents() {
+    if (!peer) return;
+
+    peer.on("open", id => {
+        peerReconnectAttempts = 0;
+        document.getElementById("idSaya").textContent = `🆔 ID Anda: ${id}`;
+        document.getElementById("jumlahPengguna").textContent = `👥 Pengguna: ${daftarNamaTerhubung.length} orang`;
+        document.getElementById("statusKoneksi").className = "status status-biru";
+        document.getElementById("statusKoneksi").innerHTML = "✅ <b>Langkah 2/4:</b> Terdaftar! Menyinkronkan room...";
+        peerIdSaya = id;
+        joinRealtimeRoom();
+        mulaiCariUlang();
+        perbaruiDaftarPengguna();
+    });
+
+    peer.on("connection", conn => {
+        koneksi[conn.peer] = conn;
+        aturKoneksi(conn);
+        perbaruiStatusTerhubung();
+    });
+
+    peer.on("call", panggilan => {
+        panggilan.answer(streamSaya);
+        pasangSuara(panggilan);
+        perbaruiStatusTerhubung();
+    });
+
+    peer.on("error", handlePeerError);
+
+    peer.on("disconnected", () => {
+        document.getElementById("statusKoneksi").className = "status status-kuning";
+        document.getElementById("statusKoneksi").innerHTML = "🔄 <b>Terputus:</b> Mencoba menghubungkan kembali...";
+
+        if (peerReconnectTimer) clearTimeout(peerReconnectTimer);
+        peerReconnectTimer = setTimeout(() => {
+            if (peer && !peer.destroyed) {
+                peer.reconnect();
+            }
+        }, 2000);
+    });
+
+    peer.on("close", () => {
+        document.getElementById("statusKoneksi").className = "status status-kuning";
+        document.getElementById("statusKoneksi").innerHTML = "🔄 <b>Terputus:</b> Koneksi ditutup. Mencoba ulang...";
     });
 }
 
+peer = createPeer();
+setupPeerEvents();
+
+    })
+    .catch(e => {
+    console.error("=== GAGAL MASUK CHANNEL ===");
+    console.error("Nama error:", e?.name);
+    console.error("Pesan:", e?.message);
+    console.error("Error lengkap:", e);
+    console.error("Stack:", e?.stack);
+
+    document.getElementById("statusKoneksi").className =
+        "status status-merah";
+
+    if (
+        e?.name === "NotAllowedError" ||
+        e?.name === "PermissionDeniedError"
+    ) {
+        document.getElementById("statusKoneksi").innerHTML =
+            "❌ <b>Izin Mikrofon Ditolak</b> — Izinkan mikrofon di browser.";
+    }
+    else if (e?.name === "NotFoundError") {
+        document.getElementById("statusKoneksi").innerHTML =
+            "❌ <b>Mikrofon Tidak Ditemukan</b>";
+    }
+    else if (e?.name === "NotReadableError") {
+        document.getElementById("statusKoneksi").innerHTML =
+            "❌ <b>Mikrofon Tidak Bisa Digunakan</b> — mungkin sedang dipakai aplikasi lain.";
+    }
+    else {
+        document.getElementById("statusKoneksi").innerHTML =
+            `❌ <b>Error aplikasi:</b> ${e?.name || "Error"} — ${e?.message || "Tidak diketahui"}`;
+    }
+});
+}
+
 function mulaiCariUlang() {
-    setInterval(() => {
-        if(!peer) return;
-        Object.keys(peer.connections).forEach(tujuan => {
-            if(!koneksi[tujuan]) {
-                const conn = peer.connect(tujuan);
-                koneksi[tujuan] = conn;
-                conn.on("open", () => {
-                    aturKoneksi(conn);
-                    conn.send({jenis:"laporNama", nama:namaSaya});
-                    perbaruiStatusTerhubung();
-                });
-                const panggil = peer.call(tujuan, streamSaya);
-                pasangSuara(panggil);
-            }
-        });
-    }, 2500);
+    if(socket && realtimeConnected) joinRealtimeRoom();
 }
 
 function perbaruiStatusTerhubung() {
@@ -2521,24 +2810,73 @@ function perbaruiDaftarPengguna() {
 }
 
 function keluarChannel() {
-    // Release floor if talking or waiting
-    if(myFloorStatus === 'talking' || myFloorStatus === 'waiting') {
-        pttUp();
+    try {
+        // Release floor if talking or waiting
+        if(myFloorStatus === 'talking' || myFloorStatus === 'waiting') {
+            try { pttUp(); } catch(e) { console.log("pttUp error:", e); }
+        }
+        if(isRecording) { try { stopRecording(); } catch(e) { console.log("stopRecording error:", e); } }
+
+        // Hentikan semua timer dan interval dulu
+        stopPttTimeout();
+        stopHeartbeat();
+        stopNetworkSpeedMonitor();
+        if(peerReconnectTimer) { clearTimeout(peerReconnectTimer); peerReconnectTimer = null; }
+        if(floorBroadcastInterval) { clearInterval(floorBroadcastInterval); floorBroadcastInterval = null; }
+
+        // Hentikan audio stream
+        if(streamSaya) {
+            try { streamSaya.getTracks().forEach(t => t.stop()); } catch(e) { console.log("stream stop error:", e); }
+            streamSaya = null;
+        }
+
+        if(socket && realtimeConnected) { try { socket.disconnect(); } catch(e) {} }
+        socket = null; realtimeConnected = false; peerIdSaya = null; serverSessions = {};
+
+        // Hancurkan peer
+        if(peer) {
+            try {
+                // Tutup semua koneksi dulu sebelum destroy peer
+                Object.values(koneksi).forEach(c => {
+                    try { if(c && c.open) c.close(); } catch(e) {}
+                });
+                peer.destroy();
+            } catch(e) {
+                console.log("Peer destroy error:", e);
+            }
+        }
+
+        // Reset state
+        peer = null;
+        koneksi = {};
+        daftarNamaTerhubung = [];
+        peerReconnectAttempts = 0;
+        currentServerIndex = 0;
+        pttPressed = false;
+        myFloorStatus = 'idle';
+
+        // Catat log
+        const ch = channelAktif;
+        channelAktif = "";
+        grupAktif = "";
+        if(ch) catatLog("KELUAR", ch);
+
+        // Pindah halaman
+        tampilHalaman("halamanDaftar");
+        muatDaftarGrup();
+
+        toast("Berhasil keluar channel", "hijau");
+    } catch(err) {
+        console.error("keluarChannel error:", err);
+        toast("Terjadi kesalahan saat keluar, mencoba reset...", "kuning");
+        // Force reset
+        channelAktif = "";
+        grupAktif = "";
+        peer = null;
+        koneksi = {};
+        tampilHalaman("halamanDaftar");
+        muatDaftarGrup();
     }
-    if(isRecording) stopRecording();
-    resetFloorState();
-    stopPttTimeout();
-    stopHeartbeat();
-    stopNetworkSpeedMonitor();
-    if(streamSaya) streamSaya.getTracks().forEach(t => t.stop());
-    if(peer) peer.destroy();
-    koneksi = {};
-    daftarNamaTerhubung = [];
-    catatLog("KELUAR", channelAktif);
-    channelAktif = "";
-    grupAktif = "";
-    tampilHalaman("halamanDaftar");
-    muatDaftarGrup();
 }
 
 function aturKoneksi(conn) {
@@ -2640,13 +2978,18 @@ function pttDown(e) {
         // Kirim whisper ke target
         const targetPeerId = channelAktif + "-" + whisperTarget.replace(/\s/g,"-");
         if(peer && !koneksi[targetPeerId]) {
-            const conn = peer.connect(targetPeerId);
-            koneksi[targetPeerId] = conn;
-            conn.on("open", () => {
-                conn.send({jenis:"whisperStart", dari:namaSaya, target:whisperTarget});
-            });
+            try {
+                const conn = peer.connect(targetPeerId);
+                if(conn) {
+                    koneksi[targetPeerId] = conn;
+                    conn.on("open", () => {
+                        try { conn.send({jenis:"whisperStart", dari:namaSaya, target:whisperTarget}); } catch(e) {}
+                    });
+                    conn.on("error", err => { console.log("Whisper conn error:", err); });
+                }
+            } catch(e) { console.log("Whisper connect failed:", e); }
         } else if(koneksi[targetPeerId]) {
-            koneksi[targetPeerId].send({jenis:"whisperStart", dari:namaSaya, target:whisperTarget});
+            try { koneksi[targetPeerId].send({jenis:"whisperStart", dari:namaSaya, target:whisperTarget}); } catch(e) { console.log("Whisper send failed:", e); }
         }
         // Call target untuk audio whisper
         if(peer) {
@@ -2707,7 +3050,7 @@ function pttUp(e) {
         // Kirim whisper end ke target
         const targetPeerId = channelAktif + "-" + whisperTarget.replace(/\s/g,"-");
         if(koneksi[targetPeerId]) {
-            koneksi[targetPeerId].send({jenis:"whisperEnd", dari:namaSaya});
+            try { koneksi[targetPeerId].send({jenis:"whisperEnd", dari:namaSaya}); } catch(e) { console.log("Whisper end failed:", e); }
         }
         updateHeartbeat();
         return;
@@ -2728,7 +3071,11 @@ function pttUp(e) {
             floorState.currentTalker = next;
             floorState.lastUpdate = Date.now();
             Object.values(koneksi).forEach(c => {
-                c.send({jenis:"floorPromote", nama: next});
+                try {
+                    if(c && c.open) c.send({jenis:"floorPromote", nama: next});
+                } catch(e) {
+                    console.log("Floor promote failed:", e.message);
+                }
             });
         }
         broadcastFloorState();
@@ -2849,8 +3196,16 @@ function onWhisperTargetChange() {
 }
 
 function broadcastFloorState() {
+    syncPresenceToServer();
+    if(socket && realtimeConnected) socket.emit("floor:event", { jenis:"floorState", state:floorState });
     const payload = {jenis:"floorState", state: floorState};
-    Object.values(koneksi).forEach(c => c.send(payload));
+    Object.values(koneksi).forEach(c => {
+        try {
+            if(c && c.open) c.send(payload);
+        } catch(e) {
+            console.log("Broadcast failed to peer:", e.message);
+        }
+    });
 }
 
 function receiveFloorState(data) {
@@ -2949,7 +3304,9 @@ function kirimPesan() {
     }
     const teks = document.getElementById("inputPesan").value.trim();
     if(!teks) return;
-    Object.values(koneksi).forEach(c => c.send({jenis:"pesan", dari:namaSaya, isi:teks}));
+    Object.values(koneksi).forEach(c => {
+        try { if(c && c.open) c.send({jenis:"pesan", dari:namaSaya, isi:teks}); } catch(e) { console.log("Send msg failed:", e.message); }
+    });
     tambahPesan(namaSaya, teks);
     document.getElementById("inputPesan").value = "";
 }
@@ -2986,11 +3343,199 @@ if(!ensureAdmin.find(p => p.nama === ADMIN_NAMA)) {
 loadTheme();
 
 // ========== SERVICE WORKER REGISTRATION (PWA) ==========
+
+// ========== ON-SCREEN DEBUG PANEL ==========
+function getDebugInfo() {
+    const peerOpen = !!(peer && peer.open);
+    const socketOpen = !!(socket && socket.connected);
+    const peerId = (peer && peer.id) ? peer.id : (peerIdSaya || "-");
+    const connectionRows = Object.entries(koneksi || {}).map(([id, conn]) => ({
+        id,
+        open: !!conn?.open,
+        type: conn?.type || "data"
+    }));
+    const sessionRows = Object.values(serverSessions || {}).map(s => ({
+        nama: s?.nama || "-",
+        peerId: s?.peerId || "-",
+        room: s?.room || s?.channel || "-",
+        socketId: s?.socketId || s?.id || "-"
+    }));
+
+    return {
+        waktu: new Date().toLocaleString(),
+        user: namaSaya || "-",
+        group: grupAktif || "-",
+        channel: channelAktif || "-",
+        online: navigator.onLine,
+        socketConnected: socketOpen,
+        socketId: socket?.id || "-",
+        peerOpen,
+        peerId,
+        peerIdSaya: peerIdSaya || "-",
+        micStream: !!streamSaya,
+        micTracks: streamSaya ? streamSaya.getAudioTracks().map(t => ({
+            enabled: t.enabled,
+            muted: t.muted,
+            readyState: t.readyState,
+            label: t.label || "-"
+        })) : [],
+        peerConnections: connectionRows,
+        serverSessions: sessionRows,
+        floorTalker: floorState?.currentTalker || "-",
+        floorStatus: myFloorStatus || "-"
+    };
+}
+
+function formatDebugInfo(d) {
+    const yesNo = v => v ? "YES" : "NO";
+    const lines = [
+        `DEBUG UI   : ${DEBUG_UI_VERSION}`,
+        `TIME       : ${d.waktu}`,
+        `USER       : ${d.user}`,
+        `GROUP      : ${d.group}`,
+        `CHANNEL    : ${d.channel}`,
+        `ONLINE     : ${yesNo(d.online)}`,
+        `SOCKET     : ${d.socketConnected ? "CONNECTED" : "DISCONNECTED"}`,
+        `SOCKET ID  : ${d.socketId}`,
+        `PEER OPEN  : ${yesNo(d.peerOpen)}`,
+        `PEER ID    : ${d.peerId}`,
+        `PEER SERVER: ${d.peerIdSaya}`,
+        `MIC STREAM : ${yesNo(d.micStream)}`,
+        `FLOOR      : ${d.floorStatus} / ${d.floorTalker}`,
+        ``,
+        `MIC TRACKS (${d.micTracks.length})`
+    ];
+    if (!d.micTracks.length) lines.push("  - none");
+    d.micTracks.forEach((t,i) => lines.push(
+        `  ${i+1}. ${t.readyState} | enabled=${t.enabled} | muted=${t.muted} | ${t.label}`
+    ));
+
+    lines.push("", `PEER DATA CONNECTIONS (${d.peerConnections.length})`);
+    if (!d.peerConnections.length) lines.push("  - none");
+    d.peerConnections.forEach((c,i) => lines.push(
+        `  ${i+1}. ${c.open ? "OPEN" : "CLOSED"} | ${c.id}`
+    ));
+
+    lines.push("", `SERVER SESSIONS (${d.serverSessions.length})`);
+    if (!d.serverSessions.length) lines.push("  - none");
+    d.serverSessions.forEach((s,i) => lines.push(
+        `  ${i+1}. ${s.nama} | peer=${s.peerId} | room=${s.room}`
+    ));
+    return lines.join("\n");
+}
+
+function refreshDebugPanel() {
+    const out = document.getElementById("debugOutput");
+    if (!out) return;
+    try {
+        out.textContent = formatDebugInfo(getDebugInfo());
+    } catch (err) {
+        out.textContent = "DEBUG ERROR: " + (err?.message || err);
+    }
+}
+
+function toggleDebugPanel() {
+    const panel = document.getElementById("debugPanel");
+    if (!panel) return;
+    panel.classList.toggle("aktif");
+    if (panel.classList.contains("aktif")) refreshDebugPanel();
+}
+
+async function copyDebugInfo() {
+    const out = document.getElementById("debugOutput");
+    if (!out) return;
+    try {
+        await navigator.clipboard.writeText(out.textContent);
+        toast("Debug info disalin.", "hijau");
+    } catch (e) {
+        toast("Gagal menyalin debug.", "merah");
+    }
+}
+
+// Refresh otomatis hanya saat panel terbuka.
+setInterval(() => {
+    const panel = document.getElementById("debugPanel");
+    if (panel?.classList.contains("aktif")) refreshDebugPanel();
+}, 2000);
+
+
+
+// ========== DEBUG GLOBAL v2 ==========
+const DEBUG_UI_VERSION = "DEBUG-GLOBAL-v2";
+
+function ensureGlobalDebugUI() {
+    if (!document.body) return;
+
+    let fab = document.getElementById("debugFab");
+    if (!fab) {
+        fab = document.createElement("button");
+        fab.id = "debugFab";
+        fab.type = "button";
+        fab.textContent = "D";
+        fab.title = "Debug koneksi";
+        fab.setAttribute("aria-label", "Debug koneksi");
+        fab.onclick = toggleDebugPanel;
+        document.body.appendChild(fab);
+    }
+
+    let panel = document.getElementById("debugPanel");
+    if (!panel) {
+        panel = document.createElement("div");
+        panel.id = "debugPanel";
+        panel.innerHTML = `
+            <div class="debug-head">
+                <strong>🛠 DEBUG GLOBAL v2</strong>
+                <div class="debug-actions">
+                    <button class="debug-mini-btn" type="button" onclick="refreshDebugPanel()">↻ Refresh</button>
+                    <button class="debug-mini-btn" type="button" onclick="copyDebugInfo()">📋 Copy</button>
+                    <button class="debug-mini-btn" type="button" onclick="toggleDebugPanel()">✕</button>
+                </div>
+            </div>
+            <pre id="debugOutput">Tekan Refresh untuk membaca status perangkat.</pre>
+        `;
+        document.body.appendChild(panel);
+    }
+
+    Object.assign(fab.style, {
+        display: "block",
+        visibility: "visible",
+        opacity: "1",
+        position: "fixed",
+        right: "14px",
+        bottom: "14px",
+        zIndex: "2147483646"
+    });
+    panel.style.zIndex = "2147483647";
+}
+
+function startGlobalDebugUI() {
+    ensureGlobalDebugUI();
+    setInterval(ensureGlobalDebugUI, 1500);
+
+    try {
+        const obs = new MutationObserver(() => {
+            if (!document.getElementById("debugFab") || !document.getElementById("debugPanel")) {
+                ensureGlobalDebugUI();
+            }
+        });
+        obs.observe(document.body, { childList: true, subtree: true });
+    } catch (_) {}
+}
+
+if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", startGlobalDebugUI, { once: true });
+} else {
+    startGlobalDebugUI();
+}
+
 if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
         navigator.serviceWorker.register('/sw.js')
             .then(reg => console.log('[PWA] SW registered:', reg.scope))
-            .catch(err => console.log('[PWA] SW failed:', err));
+            .catch(err => {
+                console.log('[PWA] SW failed (normal jika sw.js belum dibuat):', err.message);
+                // Tidak mengganggu fungsionalitas utama
+            });
     });
 }
 
