@@ -1,48 +1,48 @@
-KOMUNIKASI GROUP V2 — FULL SERVER.JS
-Recording V1/P1 integration
-=====================================
-
-Base:
-- Komunikasi Group V2 backend 2.4.1-E / A1.5
-- Existing WebRTC / Socket.IO audio path preserved
-- Existing PostgreSQL/Supabase schema ownership preserved
-- Recording V1/P1 added as a separate HTTP + Supabase Storage component
-
-Recording database contract:
-- user_group_channel
-- voice_messages
-from 001_recording_v1.sql
-
-Required Railway Variables for recording:
-- SUPABASE_URL
-- SUPABASE_SERVICE_ROLE_KEY
-- RECORDING_BUCKET=voice-recordings (optional)
-- RECORDING_MAX_SIZE_BYTES=26214400 (optional)
-- RECORDING_MAX_DURATION_MS=300000 (optional)
-- RECORDING_TTL_DAYS=7 (optional)
-
-Upload API contract:
-POST /api/recordings/upload
-Headers:
-  Authorization: Bearer <user token>
-  Content-Type: audio/webm
-  X-Client-Upload-Id: <unique id>
-  X-Group-Name: <group>
-  X-Channel-Name: <channel>
-  X-Duration-Ms: <duration in ms>
-Body:
-  raw audio bytes
-
-Important:
-- This file does NOT create/alter database tables.
-- Existing PC↔HP live voice/WebRTC path is not modified.
-- Recording storage uses the private Supabase Storage bucket.
-- Signed playback URLs expire after 5 minutes.
-- User recordings expire after RECORDING_TTL_DAYS.
-- This file is intended to replace server.js as a complete file.
-
---- BEGIN server.js ---
-
+// KOMUNIKASI GROUP V2 — FULL SERVER.JS
+// Recording V1/P1 integration
+// =====================================
+//
+// Base:
+// - Komunikasi Group V2 backend 2.4.1-E / A1.5
+// - Existing WebRTC / Socket.IO audio path preserved
+// - Existing PostgreSQL/Supabase schema ownership preserved
+// - Recording V1/P1 added as a separate HTTP + Supabase Storage component
+//
+// Recording database contract:
+// - user_group_channel
+// - voice_messages
+// from 001_recording_v1.sql
+//
+// Required Railway Variables for recording:
+// - SUPABASE_URL
+// - SUPABASE_SERVICE_ROLE_KEY
+// - RECORDING_BUCKET=voice-recordings (optional)
+// - RECORDING_MAX_SIZE_BYTES=26214400 (optional)
+// - RECORDING_MAX_DURATION_MS=300000 (optional)
+// - RECORDING_TTL_DAYS=7 (optional)
+//
+// Upload API contract:
+// POST /api/recordings/upload
+// Headers:
+//   Authorization: Bearer <user token>
+//   Content-Type: audio/webm
+//   X-Client-Upload-Id: <unique id>
+//   X-Group-Name: <group>
+//   X-Channel-Name: <channel>
+//   X-Duration-Ms: <duration in ms>
+// Body:
+//   raw audio bytes
+//
+// Important:
+// - This file does NOT create/alter database tables.
+// - Existing PC↔HP live voice/WebRTC path is not modified.
+// - Recording storage uses the private Supabase Storage bucket.
+// - Signed playback URLs expire after 5 minutes.
+// - User recordings expire after RECORDING_TTL_DAYS.
+// - This file is intended to replace server.js as a complete file.
+//
+// --- BEGIN server.js ---
+//
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
@@ -1055,4 +1055,3 @@ async function startServer(){console.log('======================================
 startServer();
 
 
---- END server.js ---
