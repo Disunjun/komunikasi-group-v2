@@ -3364,32 +3364,33 @@ kotak.scrollTop = kotak.scrollHeight;
 });
 }
 function pasangSuara(panggilan) {
-panggilan.on("stream", suaraOrang => {
-const el = document.createElement("audio");
-el.srcObject = suaraOrang;
-el.autoplay = true;
-el.id = "audio-" + Math.random().toString(36).substr(2, 9);
-el.dataset.debugPlay = "pending";
-document.body.appendChild(el);
-// Diagnostic: explicitly ask browser to play and record autoplay rejection.
-// This does not alter signaling/call logic.
-const tryPlayRemote = async () => {
-try {
-const p = el.play();
-if(p && typeof p.then === "function") await p;
-el.dataset.debugPlay = "ok";
-audioOutputUnlocked = true;
-audioUnlockLastError = "-";
-} catch(err) {
-el.dataset.debugPlay = `blocked:${err?.name || "Error"}:${err?.message || ""}`;
-audioUnlockLastError = err?.message || String(err);
-console.warn("[AUDIO] play blocked; waiting for user gesture:", err);
-}
-};
-tryPlayRemote();
-// REC CHANNEL only: capture incoming channel audio. WebRTC call is unchanged.
-addIncomingRecordingSource(suaraOrang);
-});
+    panggilan.on("stream", suaraOrang => {
+        const el = document.createElement("audio");
+        el.srcObject = suaraOrang;
+        el.autoplay = true;
+        el.id = "audio-" + Math.random().toString(36).substr(2, 9);
+        el.dataset.debugPlay = "pending";
+        document.body.appendChild(el);
+        
+        const tryPlayRemote = async () => {
+            try {
+                const p = el.play();
+                if(p && typeof p.then === "function") await p;
+                el.dataset.debugPlay = "ok";
+                audioOutputUnlocked = true;
+                audioUnlockLastError = "-";
+            } catch(err) {
+                el.dataset.debugPlay = `blocked:${err?.name || "Error"}:${err?.message || ""}`;
+                audioUnlockLastError = err?.message || String(err);
+            }
+        };
+        tryPlayRemote();
+        
+        // FIX: Hubungkan audio element ini ke recorder
+        if(recordChannelActive) {
+            setTimeout(() => connectAudioElementToRecorder(el), 500);
+        }
+    });
 }
 // ========== DEBUG v5: WEBRTC MEDIA / ICE / AUDIO OUTPUT ==========
 const debugMediaCalls = new Map();
