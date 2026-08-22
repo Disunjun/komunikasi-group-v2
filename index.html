@@ -2534,33 +2534,36 @@ return types.find(t => window.MediaRecorder && MediaRecorder.isTypeSupported(t))
 }
 // FUNGSI BARU: Merekam suara user lain dari tag <audio> (dengan retry logic)
 function connectAudioElementToRecorder(audioEl) {
-    if (!recordChannelActive || !recordChannelContext || !recordChannelDestination) return false;
-    if (!audioEl) return false;
-    
-    // Jika srcObject belum siap, tunggu dengan retry
-    if (!audioEl.srcObject) {
-        console.log("[REC] ⏳ srcObject belum siap, retry...", audioEl.id);
-        setTimeout(() => connectAudioElementToRecorder(audioEl), 500);
+    if (!recordChannelActive || !recordChannelContext || !recordChannelDestination) {
+        console.log("[REC] Context belum siap, retry...");
+        setTimeout(() => connectAudioElementToRecorder(audioEl), 300);
         return false;
     }
-    
-    if (audioEl.dataset.recConnected === "true") return false; // Mencegah error ganda
-    
+    if (!audioEl) return false;
+    if (!audioEl.srcObject) {
+        console.log("[REC] srcObject belum ada, retry...");
+        setTimeout(() => connectAudioElementToRecorder(audioEl), 300);
+        return false;
+    }
+    if (audioEl.dataset.recConnected === "true") {
+        console.log("[REC] Sudah terhubung:", audioEl.id);
+        return true;
+    }
     try {
         const source = recordChannelContext.createMediaElementSource(audioEl);
-        source.connect(recordChannelContext.destination); // Tetap ke speaker
-        source.connect(recordChannelDestination); // Disalin ke recorder
+        source.connect(recordChannelContext.destination); // Ke speaker
+        source.connect(recordChannelDestination); // Ke recorder
         audioEl.dataset.recConnected = "true";
-        console.log("[REC] ✅ Element terhubung:", audioEl.id);
+        console.log("[REC] ✅ BERHASIL terhubung:", audioEl.id);
         return true;
     } catch (e) {
         console.warn("[REC] Gagal connect element:", e);
-        // Retry sekali lagi jika gagal
+        // Retry sekali lagi
         setTimeout(() => {
-            if (!audioEl.dataset.recConnected) {
+            if (audioEl.dataset.recConnected !== "true") {
                 connectAudioElementToRecorder(audioEl);
             }
-        }, 1000);
+        }, 500);
         return false;
     }
 }
