@@ -3,6 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#2563eb">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="KomGrup">
+    <link rel="manifest" href="/manifest.json">
+    <link rel="apple-touch-icon" href="/icon-192.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
     <title>Komunikasi Grup - Suara & Teks</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; }
@@ -2977,6 +2984,15 @@ if(!ensureAdmin.find(p => p.nama === ADMIN_NAMA)) {
 
 // ========== THEME INIT ==========
 loadTheme();
+
+// ========== SERVICE WORKER REGISTRATION (PWA) ==========
+if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js')
+            .then(reg => console.log('[PWA] SW registered:', reg.scope))
+            .catch(err => console.log('[PWA] SW failed:', err));
+    });
+}
 
 // ========== PTT KEYBOARD LISTENER ==========
 document.addEventListener('keydown', e => {
