@@ -3382,27 +3382,20 @@ kotak.scrollTop = kotak.scrollHeight;
 }
 function pasangSuara(panggilan) {
     panggilan.on("stream", suaraOrang => {
+        console.log("[AUDIO] Remote stream received");
         const el = document.createElement("audio");
         el.srcObject = suaraOrang;
-        el.autoplay = false; // PENTING: Jangan autoplay dulu
+        el.autoplay = true;
         el.id = "audio-" + Math.random().toString(36).substr(2, 9);
         el.dataset.debugPlay = "pending";
         document.body.appendChild(el);
         
-        // PENTING: Connect ke recorder SEBELUM play
-        if(recordChannelActive && recordChannelContext && recordChannelDestination) {
-            try {
-                const source = recordChannelContext.createMediaElementSource(el);
-                source.connect(recordChannelContext.destination); // Ke speaker
-                source.connect(recordChannelDestination); // Ke recorder
-                el.dataset.recConnected = "true";
-                console.log("[REC] ✅ Element terhubung sebelum play:", el.id);
-            } catch (e) {
-                console.warn("[REC] Gagal connect sebelum play:", e);
-            }
+        // LANGSUNG connect ke recorder, JANGAN tunggu!
+        if (recordChannelActive) {
+            console.log("[REC] Mencoba connect audio element baru:", el.id);
+            connectAudioElementToRecorder(el);
         }
         
-        // BARU play setelah connect
         const tryPlayRemote = async () => {
             try {
                 const p = el.play();
@@ -3410,9 +3403,11 @@ function pasangSuara(panggilan) {
                 el.dataset.debugPlay = "ok";
                 audioOutputUnlocked = true;
                 audioUnlockLastError = "-";
+                console.log("[AUDIO] ✅ Playback berhasil:", el.id);
             } catch(err) {
                 el.dataset.debugPlay = `blocked:${err?.name || "Error"}:${err?.message || ""}`;
                 audioUnlockLastError = err?.message || String(err);
+                console.warn("[AUDIO] Playback blocked:", err);
             }
         };
         tryPlayRemote();
