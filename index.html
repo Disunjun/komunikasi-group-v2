@@ -2646,23 +2646,20 @@ cleanupRecordChannel();
 await renderRecordingList();
 }
 function cleanupRecordChannel() {
-recordChannelActive = false;
-stopRecordingTimer();
-if(recordChannelRecorder) {
-recordChannelRecorder.ondataavailable = null;
-recordChannelRecorder = null;
-}
-recordChannelChunks = [];
-for(const source of recordChannelSources.values()) {
-try { source.disconnect(); } catch(_) {}
-}
-recordChannelSources.clear();
-if(recordChannelContext) {
-try { recordChannelContext.close(); } catch(_) {}
-recordChannelContext = null;
-}
-recordChannelDestination = null;
-updateRecordingUI(recordLocalActive ? "local" : "");
+    if(window.__recAudioObserver) { window.__recAudioObserver.disconnect(); window.__recAudioObserver = null; }
+    recordChannelActive = false;
+    stopRecordingTimer();
+    if(recordChannelRecorder) { recordChannelRecorder.ondataavailable = null; recordChannelRecorder = null; }
+    recordChannelChunks = [];
+    for(const source of recordChannelSources.values()) { try { source.disconnect(); } catch(_) {} }
+    recordChannelSources.clear();
+    if(recordChannelContext) { try { recordChannelContext.close(); } catch(_) {} recordChannelContext = null; }
+    recordChannelDestination = null;
+    
+    // Reset status koneksi pada semua audio elements
+    document.querySelectorAll("audio").forEach(el => { el.dataset.recConnected = "false"; });
+    
+    updateRecordingUI(recordLocalActive ? "local" : "");
 }
 async function toggleRecordLocal() {
 if(recordLocalActive) {
