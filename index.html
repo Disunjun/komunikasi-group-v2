@@ -924,6 +924,39 @@ let serverSessions = {};
 let peerIdSaya = null;
 let realtimeConnected = false;
 
+let turnIceServers = [];
+let turnConfigStatus = "NOT LOADED";
+let turnConfigError = "";
+let turnLoadedAt = null;
+
+async function loadCloudflareTurnConfig() {
+    turnConfigStatus = "LOADING";
+    turnConfigError = "";
+    try {
+        const r = await fetch(`${REALTIME_SERVER_URL}/api/turn-credentials`, {
+            method: "GET",
+            headers: { "Accept": "application/json" },
+            cache: "no-store"
+        });
+        const data = await r.json().catch(() => null);
+        if (!r.ok || !data?.ok || !Array.isArray(data?.iceServers) || !data.iceServers.length) {
+            throw new Error(data?.message || `HTTP ${r.status}`);
+        }
+        turnIceServers = data.iceServers;
+        turnConfigStatus = "LOADED";
+        turnLoadedAt = new Date();
+        console.log(`[TURN] Cloudflare ICE loaded (${turnIceServers.length} servers)`);
+        return true;
+    } catch (e) {
+        turnIceServers = [];
+        turnConfigStatus = "FAILED";
+        turnConfigError = e?.message || String(e);
+        console.error("[TURN] Gagal memuat Cloudflare TURN:", turnConfigError);
+        return false;
+    }
+}
+
+
 // ========== PEERJS RECONNECT STATE (GLOBAL) ==========
 // Harus global karena dipakai saat masuk channel, reconnect, dan keluarChannel().
 let currentServerIndex = 0;
@@ -937,13 +970,71 @@ const peerConnecting = new Set();
 const peerConnectTimers = new Map();
 const PEER_CONNECT_TIMEOUT_MS = 10000;
 
-// ========== LOCALSTORAGE HELPERS ==========
-function ambilData(kunci) { 
-    const data = localStorage.getItem(kunci);
-    return data ? JSON.parse(data) : []; 
-}
-function simpanData(kunci, data) { 
+
+// ========== POSTGRESQL GROUP/CHANNEL SYNC ==========
+let centralGroups = null;
+let centralGroupsReady = false;
+let centralSaveTimer = null;
+
+async function muatGroupsPostgreSQL(silent = false) {
     try {
+        const data = await apiRequest('/api/config/groups');
+        if(!data?.ok || !Array.isArray(data.groups)) throw new Error(data?.message || 'Format groups tidak valid');
+        centralGroups = data.groups;
+        centralGroupsReady = true;
+        localStorage.setItem('daftarGrup', JSON.stringify(centralGroups)); // cache/fallback
+        if(!silent) console.log(`[DBSYNC] ${centralGroups.length} group dimuat dari PostgreSQL`);
+        return centralGroups;
+    } catch(err) {
+        console.warn('[DBSYNC] GET groups gagal, memakai cache lokal:', err.message);
+        if(!centralGroups) {
+            try { centralGroups = JSON.parse(localStorage.getItem('daftarGrup') || '[]'); }
+            catch { centralGroups = []; }
+        }
+        return centralGroups;
+    }
+}
+
+async function simpanGroupsPostgreSQL(groups) {
+    centralGroups = JSON.parse(JSON.stringify(groups || []));
+    centralGroupsReady = true;
+    localStorage.setItem('daftarGrup', JSON.stringify(centralGroups)); // cache
+    const data = await apiRequest('/api/config/groups', {
+        method:'PUT',
+        body:JSON.stringify({groups:centralGroups})
+    }, true);
+    if(data?.ok && Array.isArray(data.groups)) {
+        centralGroups = data.groups;
+        localStorage.setItem('daftarGrup', JSON.stringify(centralGroups));
+    }
+    return centralGroups;
+}
+
+function jadwalkanSimpanGroups(groups) {
+    centralGroups = JSON.parse(JSON.stringify(groups || []));
+    centralGroupsReady = true;
+    localStorage.setItem('daftarGrup', JSON.stringify(centralGroups));
+    clearTimeout(centralSaveTimer);
+    centralSaveTimer = setTimeout(() => {
+        simpanGroupsPostgreSQL(centralGroups).catch(err => {
+            console.error('[DBSYNC] PUT groups gagal:', err);
+            toast(`❌ Sinkronisasi PostgreSQL gagal: ${err.message}`, 'merah', 5000);
+        });
+    }, 80);
+}
+
+// ========== LOCALSTORAGE HELPERS ==========
+function ambilData(kunci) {
+    if(kunci === 'daftarGrup' && centralGroups) return centralGroups;
+    const data = localStorage.getItem(kunci);
+    return data ? JSON.parse(data) : [];
+}
+function simpanData(kunci, data) {
+    try {
+        if(kunci === 'daftarGrup' && centralGroupsReady) {
+            jadwalkanSimpanGroups(data);
+            return true;
+        }
         localStorage.setItem(kunci, JSON.stringify(data));
         return true;
     } catch(e) {
@@ -1100,6 +1191,7 @@ async function masukSistem() {
         const data = await apiRequest('/api/auth/login', { method:'POST', body:JSON.stringify({nama,sandi}) });
         namaSaya = data.user.nama;
         tampilHalaman("halamanDaftar");
+        await muatGroupsPostgreSQL(true);
         muatDaftarGrup();
         toast(`Selamat datang, ${namaSaya}!`, "hijau");
     } catch(err) {
@@ -1606,7 +1698,8 @@ function bersihkanAudit() {
 }
 
 
-function renderAdminPanel() {
+async function renderAdminPanel() {
+    await muatGroupsPostgreSQL(true);
     updateStats();
     if(adminTabAktif === 'users') renderUsers();
     if(adminTabAktif === 'groups') renderGroups();
@@ -2016,6 +2109,16 @@ function initRealtimeSocket() {
         if(!daftarNamaTerhubung.includes(namaSaya)) daftarNamaTerhubung.unshift(namaSaya);
         perbaruiDaftarPengguna();
         sinkronkanPeerUsers(users || []);
+    });
+    socket.on('config:groups:update', data => {
+        if(!Array.isArray(data?.groups)) return;
+        centralGroups = data.groups;
+        centralGroupsReady = true;
+        localStorage.setItem('daftarGrup', JSON.stringify(centralGroups));
+        console.log('[DBSYNC] Group/Channel live-sync diterima');
+        try { if(adminTabAktif === 'groups') renderGroups(); } catch(_) {}
+        try { if(adminTabAktif === 'channels') renderChannels(); } catch(_) {}
+        try { muatDaftarGrup(); } catch(_) {}
     });
     socket.on("presence:update", sessions => { serverSessions = sessions || {}; refreshMonitoring(); });
     socket.on("room:error", e => toast("❌ " + (e?.message || "Gagal masuk room"), "merah", 6000));
@@ -2595,7 +2698,7 @@ async function masukChannel(namaGrup, namaChannel) {
     startNetworkSpeedMonitor();
 
     navigator.mediaDevices.getUserMedia({audio:true, video:false})
-    .then(stream => {
+    .then(async stream => {
         streamSaya = stream;
         // PTT: mic OFF by default, user harus tekan PTT/SPACE
         streamSaya.getAudioTracks().forEach(track => track.enabled = false);
@@ -2623,28 +2726,34 @@ const PEERJS_SERVERS = [
 
 
 
-function createPeer() {
+async function createPeer() {
     const serverConfig = PEERJS_SERVERS[currentServerIndex];
     const peerId = peerIdSaya || ("kg-" + crypto.randomUUID());
     peerIdSaya = peerId;
 
     document.getElementById("statusKoneksi").className = "status status-kuning";
-    document.getElementById("statusKoneksi").innerHTML = `🔌 <b>Langkah 1/4:</b> Menghubung ke server ${serverConfig.host}... (coba ${peerReconnectAttempts + 1}/${MAX_RECONNECT_ATTEMPTS})`;
+    document.getElementById("statusKoneksi").innerHTML =
+        `🔌 <b>Langkah 1/4:</b> Memuat Cloudflare TURN dan menghubung ke ${serverConfig.host}...`;
+
+    // Ambil temporary ICE credentials dari backend Railway.
+    // Jika Cloudflare sementara gagal, STUN publik tetap menjadi fallback.
+    await loadCloudflareTurnConfig();
+
+    const fallbackStun = [
+        { urls: "stun:stun.l.google.com:19302" },
+        { urls: "stun:stun1.l.google.com:19302" }
+    ];
+    const iceServers = turnIceServers.length ? turnIceServers : fallbackStun;
 
     const config = {
         ...serverConfig,
         config: {
-            iceServers: [
-                { urls: "stun:stun.l.google.com:19302" },
-                { urls: "stun:stun1.l.google.com:19302" },
-                { urls: "stun:stun2.l.google.com:19302" },
-                { urls: "stun:stun3.l.google.com:19302" },
-                { urls: "stun:stun4.l.google.com:19302" }
-            ],
+            iceServers,
             iceCandidatePoolSize: 10
         }
     };
 
+    console.log(`[TURN] PeerJS ICE mode: ${turnIceServers.length ? "CLOUDFLARE TURN/STUN" : "STUN FALLBACK"}`);
     return new Peer(peerId, config);
 }
 
@@ -2672,9 +2781,9 @@ function handlePeerError(err) {
         document.getElementById("statusKoneksi").innerHTML = `🔄 <b>Retry:</b> Server gagal, mencoba ${PEERJS_SERVERS[currentServerIndex].host}... (${peerReconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`;
 
         if (peerReconnectTimer) clearTimeout(peerReconnectTimer);
-        peerReconnectTimer = setTimeout(() => {
+        peerReconnectTimer = setTimeout(async () => {
             if (peer) peer.destroy();
-            peer = createPeer();
+            peer = await createPeer();
             setupPeerEvents();
         }, 3000);
     } else if (err.type === 'peer-unavailable') {
@@ -2733,7 +2842,7 @@ function setupPeerEvents() {
     });
 }
 
-peer = createPeer();
+peer = await createPeer();
 setupPeerEvents();
 
     })
@@ -3382,7 +3491,11 @@ function getDebugInfo() {
         peerConnections: connectionRows,
         serverSessions: sessionRows,
         floorTalker: floorState?.currentTalker || "-",
-        floorStatus: myFloorStatus || "-"
+        floorStatus: myFloorStatus || "-",
+        turnStatus: turnConfigStatus,
+        turnServers: turnIceServers.length,
+        turnError: turnConfigError || "-",
+        turnLoadedAt: turnLoadedAt ? turnLoadedAt.toLocaleString() : "-"
     };
 }
 
@@ -3400,6 +3513,10 @@ function formatDebugInfo(d) {
         `PEER OPEN  : ${yesNo(d.peerOpen)}`,
         `PEER ID    : ${d.peerId}`,
         `PEER SERVER: ${d.peerIdSaya}`,
+        `TURN CONFIG: ${d.turnStatus}`,
+        `TURN SERVERS: ${d.turnServers}`,
+        `TURN LOADED: ${d.turnLoadedAt}`,
+        `TURN ERROR : ${d.turnError}`,
         `MIC STREAM : ${yesNo(d.micStream)}`,
         `FLOOR      : ${d.floorStatus} / ${d.floorTalker}`,
         ``,
@@ -3461,7 +3578,7 @@ setInterval(() => {
 
 
 // ========== DEBUG GLOBAL v2 ==========
-const DEBUG_UI_VERSION = "DEBUG-GLOBAL-v2";
+const DEBUG_UI_VERSION = "DEBUG-GLOBAL-v4-DBSYNC-CLEAN";
 
 function ensureGlobalDebugUI() {
     if (!document.body) return;
@@ -3484,7 +3601,7 @@ function ensureGlobalDebugUI() {
         panel.id = "debugPanel";
         panel.innerHTML = `
             <div class="debug-head">
-                <strong>🛠 DEBUG GLOBAL v2</strong>
+                <strong>🛠 DEBUG GLOBAL v4 DBSYNC CLEAN</strong>
                 <div class="debug-actions">
                     <button class="debug-mini-btn" type="button" onclick="refreshDebugPanel()">↻ Refresh</button>
                     <button class="debug-mini-btn" type="button" onclick="copyDebugInfo()">📋 Copy</button>
