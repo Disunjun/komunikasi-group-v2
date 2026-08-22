@@ -2535,8 +2535,16 @@ return types.find(t => window.MediaRecorder && MediaRecorder.isTypeSupported(t))
 // FUNGSI BARU: Merekam suara user lain dari tag <audio>
 function connectAudioElementToRecorder(audioEl) {
     if (!recordChannelActive || !recordChannelContext || !recordChannelDestination) return false;
-    if (!audioEl || !audioEl.srcObject) return false;
+    if (!audioEl) return false;
     if (audioEl.dataset.recConnected === "true") return false;
+    
+    // Jika srcObject belum siap, tunggu dengan retry
+    if (!audioEl.srcObject) {
+        console.log("[REC]  srcObject belum siap, retry...", audioEl.id);
+        setTimeout(() => connectAudioElementToRecorder(audioEl), 500);
+        return false;
+    }
+    
     try {
         const source = recordChannelContext.createMediaElementSource(audioEl);
         source.connect(recordChannelContext.destination);
@@ -2546,19 +2554,14 @@ function connectAudioElementToRecorder(audioEl) {
         return true;
     } catch (e) {
         console.warn("[REC] Gagal connect element:", e);
+        // Retry sekali lagi jika gagal
+        setTimeout(() => {
+            if (!audioEl.dataset.recConnected) {
+                connectAudioElementToRecorder(audioEl);
+            }
+        }, 1000);
         return false;
     }
-}
-function addIncomingRecordingSource(stream) {
-if(!recordChannelActive || !recordChannelContext || !recordChannelDestination || !stream) return;
-try {
-if(recordChannelSources.has(stream)) return;
-const source = recordChannelContext.createMediaStreamSource(stream);
-source.connect(recordChannelDestination);
-recordChannelSources.set(stream, source);
-} catch(e) {
-console.warn("[REC CHANNEL] Incoming source failed:", e);
-}
 }
 function removeRecordingAudioElements() {
 // no-op: remote audio elements remain untouched.
