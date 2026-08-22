@@ -912,6 +912,7 @@ let mixedStream = null;
 let adminTabAktif = 'users';
 let editUserTarget = null;
 let serverUsers = []; // PostgreSQL-backed user cache (admin UI only)
+let serverAuditLogs = []; // PostgreSQL-backed audit cache (admin UI only)
 let editGroupTarget = null;
 let editChannelTarget = { grupIdx: -1, chIdx: -1 };
 let heartbeatInterval = null;
@@ -921,6 +922,8 @@ let monitoringInterval = null;
 const REALTIME_SERVER_URL = window.REALTIME_SERVER_URL || "https://komunikasi-group-v2-production.up.railway.app";
 let socket = null;
 let serverSessions = {};
+let serverAdminStats = null;
+let serverActivityLogs = [];
 let peerIdSaya = null;
 let realtimeConnected = false;
 
@@ -1281,7 +1284,7 @@ function playWhisperBeep() {
 
 // ========== ADMIN EXPORT LOG ==========
 function eksporLogAdmin() {
-    const audit = ambilData("auditLog");
+    const audit = [...serverAuditLogs];
     if(audit.length === 0) return toast("Belum ada catatan audit!", "kuning");
 
     let isiTeks = `==================================================\n`;
@@ -1335,6 +1338,59 @@ function eksporLog() {
     toast("Log berhasil diekspor!", "hijau");
 }
 
+
+// ========== STAGE G3: REALTIME ADMIN SYNC ==========
+let adminRealtimeTimer = null;
+let adminRealtimeBusy = false;
+let adminRealtimePending = false;
+
+function scheduleAdminRealtimeSync(reason = "socket") {
+    clearTimeout(adminRealtimeTimer);
+    adminRealtimeTimer = setTimeout(() => runAdminRealtimeSync(reason), 180);
+}
+
+async function runAdminRealtimeSync(reason = "socket") {
+    if(adminRealtimeBusy) {
+        adminRealtimePending = true;
+        return;
+    }
+    adminRealtimeBusy = true;
+    try {
+        await loadServerAdminStats();
+        updateStats();
+        if(adminTabAktif === 'monitoring') refreshMonitoring();
+        if(adminTabAktif === 'statistik') {
+            renderChartChannel();
+            renderChartGroup();
+            renderChartBulan();
+        }
+        console.log("[G3] Realtime admin sync:", reason);
+    } catch(err) {
+        console.warn("[G3] Realtime admin sync gagal:", err);
+    } finally {
+        adminRealtimeBusy = false;
+        if(adminRealtimePending) {
+            adminRealtimePending = false;
+            scheduleAdminRealtimeSync("pending");
+        }
+    }
+}
+
+// ========== STAGE G2: CENTRALIZED MONITORING + STATISTICS ==========
+function normalizeServerSessions(input) {
+    if(Array.isArray(input)) return Object.fromEntries(input.filter(Boolean).map(s => [s.nama || s.socketId, s]));
+    if(input && typeof input === "object") return input;
+    return {};
+}
+
+async function loadServerAdminStats() {
+    const data = await apiRequest('/api/admin/stats', { method:'GET' }, true);
+    serverAdminStats = data || null;
+    serverActivityLogs = Array.isArray(data?.activity) ? data.activity : [];
+    if(Array.isArray(data?.sessions)) serverSessions = normalizeServerSessions(data.sessions);
+    return data;
+}
+
 // ========== ADMIN PANEL - TABS ==========
 function pilihTab(tab) {
     adminTabAktif = tab;
@@ -1353,22 +1409,30 @@ function pilihTab(tab) {
 }
 
 function updateStats() {
-    const users = serverUsers;
     const grup = ambilData("daftarGrup");
-    const sessions = ambilData("onlineSessions");
-    const now = Date.now();
-    const onlineCount = Object.values(sessions).filter(s => now - s.timestamp < 60000).length;
-    const totalCh = grup.reduce((sum, g) => sum + g.channel.length, 0);
+    const totalCh = grup.reduce((sum, g) => sum + (Array.isArray(g.channel) ? g.channel.length : 0), 0);
+    const summary = serverAdminStats?.summary || {};
 
-    document.getElementById("statTotalUsers").textContent = users.length;
-    document.getElementById("statOnlineUsers").textContent = onlineCount;
-    document.getElementById("statTotalGroups").textContent = grup.length;
-    document.getElementById("statTotalChannels").textContent = totalCh;
+    document.getElementById("statTotalUsers").textContent =
+        Number.isFinite(Number(summary.totalUsers)) ? Number(summary.totalUsers) : serverUsers.length;
+    document.getElementById("statOnlineUsers").textContent =
+        Number.isFinite(Number(summary.onlineUsers)) ? Number(summary.onlineUsers) : Object.keys(normalizeServerSessions(serverSessions)).length;
+    document.getElementById("statTotalGroups").textContent =
+        Number.isFinite(Number(summary.totalGroups)) ? Number(summary.totalGroups) : grup.length;
+    document.getElementById("statTotalChannels").textContent =
+        Number.isFinite(Number(summary.totalChannels)) ? Number(summary.totalChannels) : totalCh;
 }
 
 
 // ========== STATISTIK CHARTS ==========
-function renderStatistik() {
+async function renderStatistik() {
+    try {
+        await loadServerAdminStats();
+        updateStats();
+    } catch(err) {
+        console.warn("[G2] Gagal load statistik server:", err);
+        toast(`❌ Statistik server: ${err.message}`, "merah", 5000);
+    }
     renderChartChannel();
     renderChartGroup();
     renderChartBulan();
@@ -1389,8 +1453,8 @@ function renderChartChannel() {
     const chartW = w - padding.left - padding.right;
     const chartH = h - padding.top - padding.bottom;
 
-    // Data: count unique users per channel from logAktivitas
-    const logs = ambilData("logAktivitas");
+    // PostgreSQL activity_logs: unique users per channel (12 bulan)
+    const logs = serverActivityLogs.filter(l => l.aksi === 'MASUK');
     const channelData = {};
     logs.forEach(l => {
         if(!channelData[l.channel]) channelData[l.channel] = new Set();
@@ -1468,19 +1532,11 @@ function renderChartGroup() {
     const chartW = w - padding.left - padding.right;
     const chartH = h - padding.top - padding.bottom;
 
-    // Data: count unique users per group from logAktivitas + channel→group mapping
-    const logs = ambilData("logAktivitas");
-    const grup = ambilData("daftarGrup");
-    const channelToGroup = {};
-    grup.forEach(g => {
-        g.channel.forEach(c => {
-            channelToGroup[c.nama] = g.nama;
-        });
-    });
-
+    // PostgreSQL activity_logs: unique users per group (12 bulan)
+    const logs = serverActivityLogs.filter(l => l.aksi === 'MASUK');
     const groupData = {};
     logs.forEach(l => {
-        const gName = channelToGroup[l.channel] || "Lainnya";
+        const gName = l.group || "Lainnya";
         if(!groupData[gName]) groupData[gName] = new Set();
         groupData[gName].add(l.nama);
     });
@@ -1566,18 +1622,16 @@ function renderChartBulan() {
         });
     }
 
-    // Data: count unique users per month
-    const logs = ambilData("logAktivitas");
+    // PostgreSQL activity_logs: unique users per month
+    const logs = serverActivityLogs.filter(l => l.aksi === 'MASUK');
     const monthData = {};
     months.forEach(m => monthData[m.key] = new Set());
 
     logs.forEach(l => {
-        // Parse tgl format "DD/MM/YYYY" → "M/YYYY"
-        const parts = l.tgl.split('/');
-        if(parts.length === 3) {
-            const key = parseInt(parts[1]) + "/" + parts[2];
-            if(monthData[key]) monthData[key].add(l.nama);
-        }
+        const d = new Date(l.createdAt);
+        if(Number.isNaN(d.getTime())) return;
+        const key = (d.getMonth()+1) + "/" + d.getFullYear();
+        if(monthData[key]) monthData[key].add(l.nama);
     });
 
     const labels = months.map(m => m.label);
@@ -1653,29 +1707,51 @@ function renderChartBulan() {
     });
 }
 
-// ========== AUDIT LOG ==========
-function catatAudit(aksi, target, detail="") {
-    const sekarang = new Date();
-    const tgl = sekarang.toLocaleDateString('id-ID');
-    const jam = sekarang.toLocaleTimeString('id-ID');
-    const audit = ambilData("auditLog");
-    audit.unshift({
-        tgl, jam,
-        admin: namaSaya || ADMIN_NAMA,
-        aksi,
-        target,
-        detail
-    });
-    simpanData("auditLog", audit.slice(0, 500));
-    if(adminTabAktif === 'audit') renderAudit();
+// ========== AUDIT LOG — POSTGRESQL SYNC STAGE E2 ==========
+function normalizeServerAudit(a) {
+    const dt = a?.createdAt ? new Date(a.createdAt) : new Date();
+    return {
+        id: a?.id ?? null,
+        tgl: dt.toLocaleDateString('id-ID'),
+        jam: dt.toLocaleTimeString('id-ID'),
+        admin: a?.adminName || '-',
+        aksi: a?.action || '-',
+        target: a?.target || '',
+        detail: a?.detail || ''
+    };
 }
-function renderAudit() {
+
+// Kept for compatibility with existing Admin UI calls.
+// Server E1 already records authoritative admin actions in PostgreSQL.
+// Therefore this function no longer writes a second localStorage copy.
+function catatAudit(aksi, target, detail="") {
+    console.log("[AUDIT] Server-authoritative:", aksi, target, detail);
+}
+
+async function loadServerAuditLogs(limit = 500) {
+    const data = await apiRequest(`/api/audit-logs?limit=${limit}`, { method:'GET' }, true);
+    serverAuditLogs = Array.isArray(data?.logs) ? data.logs.map(normalizeServerAudit) : [];
+    return serverAuditLogs;
+}
+
+async function renderAudit() {
     const tbody = document.getElementById("tabelAudit");
-    const audit = ambilData("auditLog");
-    if(audit.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="5" class="empty-state"><div class="empty-state-icon">📋</div>Belum ada catatan audit</td></tr>`;
+    if(!tbody) return;
+    tbody.innerHTML = `<tr><td colspan="5">Memuat Audit Log dari PostgreSQL...</td></tr>`;
+
+    try {
+        await loadServerAuditLogs();
+    } catch(err) {
+        tbody.innerHTML = `<tr><td colspan="5" class="empty-state">❌ ${err.message}</td></tr>`;
         return;
     }
+
+    const audit = serverAuditLogs;
+    if(audit.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="5" class="empty-state"><div class="empty-state-icon">📋</div>Belum ada catatan audit di PostgreSQL</td></tr>`;
+        return;
+    }
+
     tbody.innerHTML = audit.map(a => {
         let aksiBadge = '<span class="badge badge-abu">' + a.aksi + '</span>';
         if(a.aksi.includes('HAPUS') || a.aksi.includes('BAN') || a.aksi.includes('KICK')) aksiBadge = '<span class="badge badge-merah">' + a.aksi + '</span>';
@@ -1690,11 +1766,16 @@ function renderAudit() {
         </tr>`;
     }).join('');
 }
-function bersihkanAudit() {
-    if(!confirm("Yakin hapus semua catatan audit?")) return;
-    simpanData("auditLog", []);
-    renderAudit();
-    toast("Audit log dibersihkan!", "kuning");
+
+async function bersihkanAudit() {
+    if(!confirm("Yakin hapus semua catatan audit PostgreSQL?")) return;
+    try {
+        await apiRequest('/api/audit-logs', { method:'DELETE' }, true);
+        await renderAudit();
+        toast("Audit log PostgreSQL dibersihkan!", "kuning");
+    } catch(err) {
+        toast(`❌ ${err.message}`, "merah", 5000);
+    }
 }
 
 
@@ -1704,6 +1785,7 @@ async function renderAdminPanel() {
     if(adminTabAktif === 'users') renderUsers();
     if(adminTabAktif === 'groups') renderGroups();
     if(adminTabAktif === 'channels') renderChannels();
+    if(adminTabAktif === 'audit') await renderAudit();
     if(adminTabAktif === 'monitoring') refreshMonitoring();
 }
 
@@ -1999,7 +2081,7 @@ function hapusChannelAdmin(gi, ci) {
 function refreshMonitoring() {
     const container = document.getElementById("monitoringTree");
     const grup = ambilData("daftarGrup");
-    const sessions = Object.keys(serverSessions).length ? serverSessions : ambilData("onlineSessions");
+    const sessions = normalizeServerSessions(serverSessions);
     const now = Date.now();
     const kicked = ambilData("kickedUsers");
 
@@ -2120,7 +2202,36 @@ function initRealtimeSocket() {
         try { if(adminTabAktif === 'channels') renderChannels(); } catch(_) {}
         try { muatDaftarGrup(); } catch(_) {}
     });
-    socket.on("presence:update", sessions => { serverSessions = sessions || {}; refreshMonitoring(); });
+    socket.on("audit:new", log => {
+        try {
+            const item = normalizeServerAudit(log);
+            serverAuditLogs = [item, ...serverAuditLogs.filter(x => String(x.id) !== String(item.id))].slice(0,500);
+            if(adminTabAktif === 'audit') renderAudit();
+            scheduleAdminRealtimeSync("audit:new");
+            console.log("[AUDIT] Realtime PostgreSQL log diterima:", item.aksi);
+        } catch(err) {
+            console.warn("[AUDIT] Realtime parse gagal:", err);
+        }
+    });
+    socket.on("presence:update", sessions => {
+        serverSessions = normalizeServerSessions(sessions);
+
+        // G3.1: presence Socket.IO adalah sumber ONLINE realtime.
+        // Jangan biarkan summary hasil fetch sebelumnya menahan angka Online lama.
+        if(!serverAdminStats) serverAdminStats = { summary:{} };
+        if(!serverAdminStats.summary) serverAdminStats.summary = {};
+        serverAdminStats.summary.onlineUsers = Object.keys(serverSessions).length;
+        serverAdminStats.sessions = Object.values(serverSessions);
+
+        updateStats();
+
+        // Refresh tree langsung; aman walaupun tab Monitoring sedang tersembunyi.
+        refreshMonitoring();
+
+        // Activity/statistik PostgreSQL menyusul sesudah event realtime.
+        scheduleAdminRealtimeSync("presence:update");
+        console.log("[G3.1] presence realtime:", Object.keys(serverSessions).length);
+    });
     socket.on("room:error", e => toast("❌ " + (e?.message || "Gagal masuk room"), "merah", 6000));
     socket.on("admin:kick", () => { toast("Anda telah di-kick oleh admin!", "merah", 5000); keluarChannel(); });
     socket.on("floor:event", receiveFloorState);
@@ -3766,6 +3877,7 @@ setInterval(() => {
 
 // ========== DEBUG GLOBAL v2 ==========
 const DEBUG_UI_VERSION = "DEBUG-GLOBAL-v6-AUDIO-UNLOCK";
+const FRONTEND_BUILD = "2.6.2-G3.1-REALTIME-FIX";
 
 function ensureGlobalDebugUI() {
     if (!document.body) return;
