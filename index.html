@@ -995,6 +995,7 @@ let editGroupTarget = null;
 let editChannelTarget = { grupIdx: -1, chIdx: -1 };
 let heartbeatInterval = null;
 let monitoringInterval = null;
+let broadcastDebug = { stage:'idle', type:'-', fileName:'-', bytes:0, mb:0, sentAt:'-', receivedAt:'-', playState:'-', lastError:'-', ack:null };
 
 // ========== REALTIME SERVER V2 ==========
 const REALTIME_SERVER_URL = window.REALTIME_SERVER_URL || "https://komunikasi-group-v2-production.up.railway.app";
@@ -1620,45 +1621,60 @@ function getBroadcastTargets() {
 function testBroadcast() {
     const data = validateBroadcastForm();
     if(!data) return;
-    
     const targets = getBroadcastTargets();
-    if(!targets) {
-        toast('❌ Tidak ada channel target!', 'merah');
-        return;
-    }
-    
-    const targetSocket = socket;
-    if(!targetSocket || !targetSocket.connected) {
-        toast('❌ Socket Admin belum terhubung!', 'merah');
-        return;
-    }
-    
+    if(!targets) { toast('❌ Tidak ada channel target!', 'merah'); return; }
+    if(!socket || !socket.connected) { toast('❌ Socket belum terhubung!', 'merah'); return; }
+    const targetSocket = adminSocket || socket;
+
+    broadcastDebug = { stage:'preparing', type:data.type, fileName:data.file?.name || '-', bytes:0, mb:0, sentAt:'-', receivedAt:'-', playState:'-', lastError:'-', ack:null };
+    refreshDebugPanel();
+
     if(data.type === 'teks') {
-        targetSocket.emit('admin:broadcast', {
-            type: 'teks',
-            pesan: data.pesan,
-            targets: targets,
-            isTest: true
-        }, (res) => {
-            if(res?.ok) toast(`✅ Test Teks terkirim!`, 'hijau');
-            else toast(`❌ Gagal: ${res?.message || 'Error'}`, 'merah');
+        broadcastDebug.stage = 'text-sending';
+        broadcastDebug.sentAt = new Date().toLocaleString();
+        targetSocket.emit('admin:broadcast', { type:'teks', pesan:data.pesan, targets, isTest:true }, (res) => {
+            broadcastDebug.ack = res || null;
+            broadcastDebug.stage = res?.ok ? 'text-ack-ok' : 'text-ack-error';
+            broadcastDebug.lastError = res?.ok ? '-' : (res?.message || 'Error');
+            refreshDebugPanel();
+            if(res?.ok) toast('✅ Test Teks terkirim!', 'hijau'); else toast(`❌ Gagal: ${res?.message || 'Error'}`, 'merah');
         });
-    } else {
-        const reader = new FileReader();
-        reader.onload = (e) => {
-            targetSocket.emit('admin:broadcast', {
-                type: 'audio',
-                fileName: data.file.name,
-                audioData: e.target.result,
-                targets: targets,
-                isTest: true
-            }, (res) => {
-                if(res?.ok) toast(`✅ Test Audio terkirim!`, 'hijau');
-                else toast(`❌ Gagal: ${res?.message || 'Error'}`, 'merah');
-            });
-        };
-        reader.readAsArrayBuffer(data.file);
+        return;
     }
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+        const bytes = e.target?.result?.byteLength || 0;
+        broadcastDebug.bytes = bytes;
+        broadcastDebug.mb = Number((bytes / 1024 / 1024).toFixed(3));
+        broadcastDebug.stage = 'audio-sending';
+        broadcastDebug.sentAt = new Date().toLocaleString();
+        console.log('[BROADCAST DEBUG] SEND', { fileName:data.file.name, audioBytes:bytes, audioMB:broadcastDebug.mb, targets });
+        refreshDebugPanel();
+        try {
+            targetSocket.emit('admin:broadcast', { type:'audio', fileName:data.file.name, audioData:e.target.result, targets, isTest:true }, (res) => {
+                broadcastDebug.ack = res || null;
+                broadcastDebug.stage = res?.ok ? 'audio-ack-ok' : 'audio-ack-error';
+                broadcastDebug.lastError = res?.ok ? '-' : (res?.message || 'Error');
+                refreshDebugPanel();
+                console.log('[BROADCAST DEBUG] ACK', res);
+                if(res?.ok) toast(`✅ Test Audio terkirim! (${broadcastDebug.mb} MB)`, 'hijau'); else toast(`❌ Gagal: ${res?.message || 'Error'}`, 'merah');
+            });
+        } catch(err) {
+            broadcastDebug.stage = 'audio-emit-throw';
+            broadcastDebug.lastError = err?.message || String(err);
+            console.error('[BROADCAST DEBUG] EMIT THROW', err);
+            refreshDebugPanel();
+            toast(`❌ Gagal kirim audio: ${broadcastDebug.lastError}`, 'merah', 7000);
+        }
+    };
+    reader.onerror = () => {
+        broadcastDebug.stage = 'file-read-error';
+        broadcastDebug.lastError = reader.error?.message || 'FileReader error';
+        refreshDebugPanel();
+        toast('❌ Gagal membaca file MP3.', 'merah');
+    };
+    reader.readAsArrayBuffer(data.file);
 }
 
 function startBroadcast() {
@@ -2435,9 +2451,8 @@ function initAdminRealtimeSocket() {
         return false;
     }
 
-    const adminToken = sessionStorage.getItem("kgAdminToken") || "";
     socket = io(REALTIME_SERVER_URL, {
-        auth: { adminToken },
+        auth: { adminToken: adminToken },
         transports:["websocket","polling"],
         reconnection:true,
         reconnectionAttempts:Infinity,
@@ -2448,7 +2463,7 @@ function initAdminRealtimeSocket() {
 
     socket.on("connect", async () => {
         realtimeConnected = true;
-        console.log("[ADMIN SOCKET] CONNECTED:", socket.id);
+        console.log("[ADMIN SOCKET] CONNECTED:", socket.id, "authToken=", !!adminToken);
         try {
             await loadServerAdminStats();
             updateStats();
@@ -2470,7 +2485,7 @@ function initAdminRealtimeSocket() {
 
     socket.on("connect_error", err => {
         realtimeConnected = false;
-        console.warn("[ADMIN SOCKET] CONNECT ERROR:", err?.message || err);
+        broadcastDebug.stage = "socket-connect-error"; broadcastDebug.lastError = err?.message || String(err); refreshDebugPanel(); console.warn("[ADMIN SOCKET] CONNECT ERROR:", err?.message || err);
     });
 
     socket.on("presence:update", sessions => {
@@ -2582,6 +2597,16 @@ function initRealtimeSocket() {
     socket.on("floor:event", receiveFloorState);
     
     socket.on("server:broadcast", (data) => {
+        const audioBytes = data?.audioData?.byteLength || data?.audioData?.length || 0;
+        broadcastDebug.receivedAt = new Date().toLocaleString();
+        broadcastDebug.type = data?.type || '-';
+        broadcastDebug.fileName = data?.fileName || '-';
+        broadcastDebug.bytes = audioBytes;
+        broadcastDebug.mb = audioBytes ? Number((audioBytes / 1024 / 1024).toFixed(3)) : 0;
+        broadcastDebug.stage = data?.type === 'audio' ? 'audio-received' : 'text-received';
+        broadcastDebug.lastError = '-';
+        console.log('[BROADCAST DEBUG] RECEIVED CLIENT', { type:data?.type, fileName:data?.fileName, audioBytes, audioMB:broadcastDebug.mb });
+
         if(data.type === 'teks') {
             toast(`📢 BROADCAST: ${data.pesan}`, 'biru', 15000);
             tambahPesan('[BROADCAST]', data.pesan);
@@ -2590,12 +2615,50 @@ function initRealtimeSocket() {
                 const blob = new Blob([data.audioData], { type: 'audio/mpeg' });
                 const url = URL.createObjectURL(blob);
                 const audio = new Audio(url);
-                audio.play().catch(e => console.warn('[BROADCAST] Autoplay blocked:', e));
+                audio.dataset.debugPlay = 'created';
+                audio.onloadedmetadata = () => {
+                    audio.dataset.debugPlay = `metadata:${audio.duration || 0}s`;
+                    broadcastDebug.playState = audio.dataset.debugPlay;
+                    refreshDebugPanel();
+                };
+                audio.onended = () => { audio.dataset.debugPlay = 'ended'; broadcastDebug.playState = 'ended'; refreshDebugPanel(); URL.revokeObjectURL(url); };
+                audio.onerror = () => {
+                    audio.dataset.debugPlay = `error:${audio.error?.code || 'unknown'}`;
+                    broadcastDebug.playState = audio.dataset.debugPlay;
+                    broadcastDebug.lastError = audio.error?.message || 'HTMLAudioElement error';
+                    console.error('[BROADCAST DEBUG] AUDIO ELEMENT ERROR', audio.error);
+                    refreshDebugPanel();
+                };
+                const playPromise = audio.play();
+                if(playPromise && typeof playPromise.then === 'function') {
+                    playPromise.then(() => {
+                        audio.dataset.debugPlay = 'playing';
+                        broadcastDebug.playState = 'playing';
+                        refreshDebugPanel();
+                        console.log('[BROADCAST DEBUG] AUDIO PLAYING');
+                    }).catch(e => {
+                        audio.dataset.debugPlay = `blocked:${e?.name || 'Error'}:${e?.message || ''}`;
+                        broadcastDebug.playState = audio.dataset.debugPlay;
+                        broadcastDebug.lastError = e?.message || String(e);
+                        console.warn('[BROADCAST DEBUG] AUTOPLAY BLOCKED', e);
+                        refreshDebugPanel();
+                    });
+                }
+                broadcastDebug.stage = 'audio-play-attempt';
+                refreshDebugPanel();
                 toast(`📢 SIARAN AUDIO: ${data.fileName || 'broadcast.mp3'}`, 'biru', 10000);
             } catch(err) {
+                broadcastDebug.stage = 'audio-play-error';
+                broadcastDebug.lastError = err?.message || String(err);
                 console.error('[BROADCAST] Audio play error:', err);
                 toast('❌ Gagal memutar audio broadcast', 'merah');
+                refreshDebugPanel();
             }
+        } else if(data.type === 'audio') {
+            broadcastDebug.stage = 'audio-empty';
+            broadcastDebug.lastError = 'server:broadcast audio tanpa audioData';
+            console.warn('[BROADCAST DEBUG] AUDIO EVENT TANPA DATA');
+            refreshDebugPanel();
         }
     });
     
@@ -4153,7 +4216,8 @@ function getDebugInfo() {
         mediaDebug: debugMediaSnapshot(),
         audioOutputUnlocked,
         audioUnlockLastError,
-        audioContextState: window.__kgAudioContext?.state || "-"
+        audioContextState: window.__kgAudioContext?.state || "-",
+        broadcastDebug
     };
 }
 
@@ -4203,6 +4267,18 @@ function formatDebugInfo(d) {
             `     TRACK ${j+1}: ${t.readyState} | enabled=${t.enabled} | muted=${t.muted} | ${t.label}`
         ));
     });
+
+    lines.push("", "BROADCAST AUDIO DEBUG");
+    lines.push(`  STAGE      : ${d.broadcastDebug?.stage || "-"}`);
+    lines.push(`  TYPE       : ${d.broadcastDebug?.type || "-"}`);
+    lines.push(`  FILE       : ${d.broadcastDebug?.fileName || "-"}`);
+    lines.push(`  BYTES      : ${d.broadcastDebug?.bytes || 0}`);
+    lines.push(`  SIZE MB    : ${d.broadcastDebug?.mb || 0}`);
+    lines.push(`  SENT AT    : ${d.broadcastDebug?.sentAt || "-"}`);
+    lines.push(`  RECEIVED   : ${d.broadcastDebug?.receivedAt || "-"}`);
+    lines.push(`  PLAY STATE : ${d.broadcastDebug?.playState || "-"}`);
+    lines.push(`  LAST ERROR : ${d.broadcastDebug?.lastError || "-"}`);
+    lines.push(`  ACK        : ${d.broadcastDebug?.ack ? JSON.stringify(d.broadcastDebug.ack) : "-"}`);
 
     lines.push("", "AUDIO UNLOCK");
     lines.push(`  STATUS     : ${d.audioOutputUnlocked ? "UNLOCKED" : "LOCKED"}`);
@@ -4267,7 +4343,7 @@ setInterval(() => {
 
 
 // ========== DEBUG GLOBAL v2 ==========
-const DEBUG_UI_VERSION = "DEBUG-GLOBAL-v6-AUDIO-UNLOCK";
+const DEBUG_UI_VERSION = "DEBUG-BROADCAST-AUDIO-v1";
 const FRONTEND_BUILD = "2.8.0-J1-CHANNEL-USER-COUNT";
 
 function ensureGlobalDebugUI() {
