@@ -61,8 +61,8 @@ function getBearerToken(req) {
   const h = String(req.get('authorization') || '');
   return h.toLowerCase().startsWith('bearer ') ? h.slice(7).trim() : '';
 }
-function getAdminSession(req) {
-  const token = getBearerToken(req);
+function getAdminSessionByToken(token) {
+  token = String(token || '').trim();
   if(!token) return null;
   const tokenHash = hashAdminToken(token);
   const s = adminSessions.get(tokenHash);
@@ -72,6 +72,9 @@ function getAdminSession(req) {
     return null;
   }
   return { ...s, tokenHash };
+}
+function getAdminSession(req) {
+  return getAdminSessionByToken(getBearerToken(req));
 }
 function requireAdmin(req,res,next) {
   const session = getAdminSession(req);
@@ -574,7 +577,11 @@ app.get('/api/turn-credentials', async (req, res) => {
 app.get('/api/db-test',async(req,res)=>{if(!requireDb(res))return;try{const r=await db.query(`SELECT NOW() AS server_time,current_database() AS database_name`);res.json({ok:true,database:'connected',result:r.rows[0]});}catch(e){res.status(500).json({ok:false,error:e.message});}});
 
 io.on('connection',socket=>{
-  console.log('[SOCKET] Connected:',socket.id); socket.emit('server:ready',{version:'2.7.1-H3-TOKEN-ONLY',transport:socket.conn.transport.name});
+  const adminToken = String(socket.handshake?.auth?.adminToken || '').trim();
+  const adminSession = getAdminSessionByToken(adminToken);
+  if(adminSession) socket.data.admin = adminSession;
+  console.log('[SOCKET] Connected:',socket.id, adminSession ? '(ADMIN)' : '(USER)');
+  socket.emit('server:ready',{version:'2.7.1-H3-TOKEN-ONLY',transport:socket.conn.transport.name});
   socket.on('room:join',async payload=>{try{
     const nama=String(payload?.nama||'').trim(),group=String(payload?.group||'').trim(),channel=String(payload?.channel||'').trim(),peerId=String(payload?.peerId||'').trim(),maxUsers=Number(payload?.maxUsers||0);
     if(!nama||!group||!channel||!peerId)return socket.emit('room:error',{message:'Data room tidak lengkap.'});
@@ -606,9 +613,9 @@ io.on('connection',socket=>{
   
   socket.on('admin:broadcast',async(payload,ack)=>{
     const adminToken=String(socket.handshake?.auth?.adminToken||'').trim();
-    let admin=socket.data.admin||null;
-    if(!admin && adminToken && db) admin=await getAdminFromToken(adminToken);
+    const admin=getAdminSessionByToken(adminToken) || socket.data.admin || null;
     if(!admin) return ack?.({ok:false,message:'Admin tidak terautentikasi.'});
+    socket.data.admin = admin;
     
     if(!Array.isArray(payload?.targets)) return ack?.({ok:false,message:'Format targets tidak valid.'});
     
@@ -622,7 +629,7 @@ io.on('connection',socket=>{
       });
     });
     
-    if(db) await writeAudit(ADMIN_NAME,'BROADCAST',payload.type,`Targets: ${payload.targets.length}`);
+    if(db) await writeAudit(admin.adminName || ADMIN_NAME,'BROADCAST',payload.type,`Targets: ${payload.targets.length}`);
     ack?.({ok:true});
   });
 
