@@ -603,6 +603,29 @@ io.on('connection',socket=>{
   socket.on('floor:event',event=>{const s=sessions.get(socket.id);if(!s?.room)return;socket.to(s.room).emit('floor:event',{...event,from:s.nama});});
   socket.on('chat:send',async(payload,ack)=>{try{const s=sessions.get(socket.id);if(!s?.room){ack?.({ok:false,message:'Belum masuk channel.'});return;}const message=String(payload?.message||'').trim().slice(0,2000);if(!message){ack?.({ok:false,message:'Pesan kosong.'});return;}if(db){const ur=await db.query(`SELECT muted,active,banned FROM users WHERE lower(username)=lower($1) LIMIT 1`,[s.nama]);if(ur.rows[0]?.muted||!ur.rows[0]?.active||ur.rows[0]?.banned){ack?.({ok:false,message:'Akun tidak diizinkan mengirim pesan.'});return;}await db.query(`INSERT INTO chat_messages(username,group_name,channel_name,message) VALUES($1,$2,$3,$4)`,[s.nama,s.group,s.channel,message]);}io.to(s.room).emit('chat:message',{nama:s.nama,message});ack?.({ok:true});}catch(e){console.error('[CHAT ERROR]',e.message);socket.emit('chat:error',{message:'Pesan gagal dikirim.'});ack?.({ok:false,message:'Pesan gagal dikirim.'});}});
   socket.on('admin:kick',async({nama})=>{if(!nama)return;kicked.set(nama,Date.now()+300000);await writeAudit(ADMIN_NAME,'KICK USER',nama,'User di-kick selama 5 menit');for(const s of sessions.values())if(s.nama===nama){io.to(s.socketId).emit('admin:kick',{nama,expiresAt:kicked.get(nama)});io.sockets.sockets.get(s.socketId)?.disconnect(true);}});
+  
+  socket.on('admin:broadcast',async(payload,ack)=>{
+    const adminToken=String(socket.handshake?.auth?.adminToken||'').trim();
+    let admin=socket.data.admin||null;
+    if(!admin && adminToken && db) admin=await getAdminFromToken(adminToken);
+    if(!admin) return ack?.({ok:false,message:'Admin tidak terautentikasi.'});
+    
+    if(!Array.isArray(payload?.targets)) return ack?.({ok:false,message:'Format targets tidak valid.'});
+    
+    payload.targets.forEach(t=>{
+      const room=`${t.grup}::${t.channel}`;
+      io.to(room).emit('server:broadcast',{
+        type:payload.type,
+        pesan:payload.pesan,
+        fileName:payload.fileName,
+        audioData:payload.audioData
+      });
+    });
+    
+    if(db) await writeAudit(ADMIN_NAME,'BROADCAST',payload.type,`Targets: ${payload.targets.length}`);
+    ack?.({ok:true});
+  });
+
   socket.on('disconnect',async reason=>{const s=sessions.get(socket.id);console.log('[SOCKET] Disconnect:',socket.id,reason);if(!s)return;rooms.get(s.room)?.delete(socket.id);if(rooms.get(s.room)?.size===0)rooms.delete(s.room);sessions.delete(socket.id);await removePresence(socket.id);await writeActivity(s.nama,s.group,s.channel,'KELUAR');if(s.room)io.to(s.room).emit('room:users',roomUsers(s.room));emitPresence();});
 });
 setInterval(()=>{

@@ -1542,12 +1542,114 @@ function onBroadcastTypeChange() {
 
 function onBroadcastPeriodeChange() {}
 
+function validateBroadcastForm() {
+    const broadcastType = document.querySelector('input[name="broadcastType"]:checked').value;
+    
+    if(broadcastType === 'teks') {
+        const pesan = document.getElementById('broadcastPesanTeks').value.trim();
+        if(!pesan) {
+            toast('❌ Pesan teks tidak boleh kosong!', 'merah');
+            return null;
+        }
+        return { type: 'teks', pesan };
+    } else {
+        const file = document.getElementById('broadcastFileMp3').files[0];
+        if(!file) {
+            toast('❌ Pilih file MP3 terlebih dahulu!', 'merah');
+            return null;
+        }
+        return { type: 'audio', file };
+    }
+}
+
+function getBroadcastTargets() {
+    const targetSaluran = document.getElementById('broadcastTargetSaluran').value;
+    const targets = [];
+    
+    if(targetSaluran === 'all') {
+        centralGroups.forEach(g => {
+            if(Array.isArray(g.channel)) {
+                g.channel.forEach(c => {
+                    targets.push({ grup: g.nama, channel: c.nama });
+                });
+            }
+        });
+    } else if(targetSaluran === 'group') {
+        const groupIdx = document.getElementById('broadcastGroupSelect').value;
+        if(!groupIdx && groupIdx !== '0') {
+            toast('❌ Pilih Group terlebih dahulu!', 'merah');
+            return null;
+        }
+        const grup = centralGroups[groupIdx];
+        if(grup && Array.isArray(grup.channel)) {
+            grup.channel.forEach(c => {
+                targets.push({ grup: grup.nama, channel: c.nama });
+            });
+        }
+    } else if(targetSaluran === 'channel') {
+        const channelNama = document.getElementById('broadcastChannelSelect').value;
+        if(!channelNama) {
+            toast('❌ Pilih Channel terlebih dahulu!', 'merah');
+            return null;
+        }
+        for(let g of centralGroups) {
+            for(let c of (g.channel || [])) {
+                if(c.nama === channelNama) {
+                    targets.push({ grup: g.nama, channel: c.nama });
+                    return targets;
+                }
+            }
+        }
+    }
+    
+    return targets.length > 0 ? targets : null;
+}
+
 function testBroadcast() {
-    alert("Menjalankan tes siaran...");
+    const data = validateBroadcastForm();
+    if(!data) return;
+    
+    const targets = getBroadcastTargets();
+    if(!targets) {
+        toast('❌ Tidak ada channel target!', 'merah');
+        return;
+    }
+    
+    if(!socket || !socket.connected) {
+        toast('❌ Socket belum terhubung!', 'merah');
+        return;
+    }
+    
+    if(data.type === 'teks') {
+        socket.emit('admin:broadcast', {
+            type: 'teks',
+            pesan: data.pesan,
+            targets: targets,
+            isTest: true
+        }, (res) => {
+            if(res?.ok) toast(`✅ Test Teks terkirim ke ${targets.length} channel`, 'hijau');
+            else toast(`❌ Gagal: ${res?.message || 'Error'}`, 'merah');
+        });
+    } else {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            socket.emit('admin:broadcast', {
+                type: 'audio',
+                fileName: data.file.name,
+                audioData: e.target.result,
+                targets: targets,
+                isTest: true
+            }, (res) => {
+                if(res?.ok) toast(`✅ Test Audio terkirim ke ${targets.length} channel`, 'hijau');
+                else toast(`❌ Gagal: ${res?.message || 'Error'}`, 'merah');
+            });
+        };
+        reader.readAsArrayBuffer(data.file);
+    }
 }
 
 function startBroadcast() {
-    alert("Fitur siaran sedang dalam tahap implementasi.");
+    testBroadcast();
 }
 
 function updateStats() {
@@ -2463,6 +2565,25 @@ function initRealtimeSocket() {
     socket.on("room:error", e => toast("❌ " + (e?.message || "Gagal masuk room"), "merah", 6000));
     socket.on("admin:kick", () => { toast("Anda telah di-kick oleh admin!", "merah", 5000); keluarChannel(); });
     socket.on("floor:event", receiveFloorState);
+    
+    socket.on("server:broadcast", (data) => {
+        if(data.type === 'teks') {
+            toast(`📢 BROADCAST: ${data.pesan}`, 'biru', 15000);
+            tambahPesan('[BROADCAST]', data.pesan);
+        } else if(data.type === 'audio' && data.audioData) {
+            try {
+                const blob = new Blob([data.audioData], { type: 'audio/mpeg' });
+                const url = URL.createObjectURL(blob);
+                const audio = new Audio(url);
+                audio.play().catch(e => console.warn('[BROADCAST] Autoplay blocked:', e));
+                toast(`📢 SIARAN AUDIO: ${data.fileName || 'broadcast.mp3'}`, 'biru', 10000);
+            } catch(err) {
+                console.error('[BROADCAST] Audio play error:', err);
+                toast('❌ Gagal memutar audio broadcast', 'merah');
+            }
+        }
+    });
+    
     return true;
 }
 function joinRealtimeRoom() {
