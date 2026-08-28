@@ -1627,13 +1627,11 @@ function testBroadcast() {
         return;
     }
     
-    if(!socket || !socket.connected) {
-        toast('❌ Socket belum terhubung!', 'merah');
+    const targetSocket = socket;
+    if(!targetSocket || !targetSocket.connected) {
+        toast('❌ Socket Admin belum terhubung!', 'merah');
         return;
     }
-    
-    // Gunakan adminSocket jika tersedia, fallback ke socket utama
-    const targetSocket = adminSocket || socket;
     
     if(data.type === 'teks') {
         targetSocket.emit('admin:broadcast', {
@@ -2437,7 +2435,9 @@ function initAdminRealtimeSocket() {
         return false;
     }
 
+    const adminToken = sessionStorage.getItem("kgAdminToken") || "";
     socket = io(REALTIME_SERVER_URL, {
+        auth: { adminToken },
         transports:["websocket","polling"],
         reconnection:true,
         reconnectionAttempts:Infinity,
