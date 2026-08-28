@@ -730,6 +730,7 @@
                         <label style="font-weight:bold;color:#93c5fd;">Jadwal</label>
                         <div class="baris">
                             <input type="datetime-local" id="broadcastJadwal" style="flex:1;min-width:200px;">
+                            <button class="btn btn-kuning" onclick="testBroadcast()">🧪 Test</button>
                             <button class="btn btn-hijau" onclick="startBroadcast()">▶️ Mulai Siaran</button>
                         </div>
                     </div>
@@ -1541,6 +1542,11 @@ function onBroadcastTypeChange() {
 
 function onBroadcastPeriodeChange() {
     // Logic untuk periode bisa ditambahkan disini
+}
+
+function testBroadcast() {
+    alert("Menjalankan tes siaran...");
+    // Tambahkan logika pengujian broadcast disini
 }
 
 function startBroadcast() {
