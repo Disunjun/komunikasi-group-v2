@@ -2641,6 +2641,25 @@ function initRealtimeSocket() {
     socket.on("room:error", e => toast("❌ " + (e?.message || "Gagal masuk room"), "merah", 6000));
     socket.on("admin:kick", () => { toast("Anda telah di-kick oleh admin!", "merah", 5000); keluarChannel(); });
     socket.on("floor:event", receiveFloorState);
+    
+    // Listener Broadcast
+    socket.on("server:broadcast", (data) => {
+        if (data.type === 'teks') {
+            toast(`📢 BROADCAST: ${data.pesan}`, 'biru', 15000);
+        } else if (data.type === 'audio') {
+            try {
+                // Convert ArrayBuffer ke Blob lalu ke URL
+                const blob = new Blob([data.audioData], { type: 'audio/mpeg' });
+                const url = URL.createObjectURL(blob);
+                const audio = new Audio(url);
+                audio.play().catch(e => console.warn("Autoplay audio blocked:", e));
+                toast(`📢 AUDIO BROADCAST: ${data.fileName}`, 'biru', 10000);
+            } catch(err) {
+                console.error("Gagal memutar audio broadcast:", err);
+            }
+        }
+    });
+
     return true;
 }
 function joinRealtimeRoom() {
