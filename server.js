@@ -20,6 +20,14 @@ const adminSessions = new Map(); // tokenHash -> {adminName, expiresAt, createdA
 
 const corsOrigin = FRONTEND_ORIGINS.includes('*') ? true : FRONTEND_ORIGINS;
 const io = new Server(server, { cors: { origin: corsOrigin, methods: ['GET','POST','PATCH','DELETE'] }, transports: ['websocket','polling'] });
+
+io.engine.on('connection_error', err => {
+  console.error('[SOCKET ENGINE ERROR]', {
+    message: err?.message || String(err),
+    code: err?.code,
+    context: err?.context || null
+  });
+});
 app.use(cors({ origin: corsOrigin }));
 app.use(express.json({ limit: '64kb' }));
 
@@ -61,8 +69,8 @@ function getBearerToken(req) {
   const h = String(req.get('authorization') || '');
   return h.toLowerCase().startsWith('bearer ') ? h.slice(7).trim() : '';
 }
-function getAdminSessionByToken(token) {
-  token = String(token || '').trim();
+function getAdminSession(req) {
+  const token = getBearerToken(req);
   if(!token) return null;
   const tokenHash = hashAdminToken(token);
   const s = adminSessions.get(tokenHash);
@@ -72,9 +80,6 @@ function getAdminSessionByToken(token) {
     return null;
   }
   return { ...s, tokenHash };
-}
-function getAdminSession(req) {
-  return getAdminSessionByToken(getBearerToken(req));
 }
 function requireAdmin(req,res,next) {
   const session = getAdminSession(req);
@@ -577,11 +582,19 @@ app.get('/api/turn-credentials', async (req, res) => {
 app.get('/api/db-test',async(req,res)=>{if(!requireDb(res))return;try{const r=await db.query(`SELECT NOW() AS server_time,current_database() AS database_name`);res.json({ok:true,database:'connected',result:r.rows[0]});}catch(e){res.status(500).json({ok:false,error:e.message});}});
 
 io.on('connection',socket=>{
-  const adminToken = String(socket.handshake?.auth?.adminToken || '').trim();
-  const adminSession = getAdminSessionByToken(adminToken);
-  if(adminSession) socket.data.admin = adminSession;
-  console.log('[SOCKET] Connected:',socket.id, adminSession ? '(ADMIN)' : '(USER)');
-  socket.emit('server:ready',{version:'2.7.1-H3-TOKEN-ONLY',transport:socket.conn.transport.name});
+  const handshakeAdminToken = String(socket.handshake?.auth?.adminToken || '').trim();
+  console.log('[SOCKET] Connected:',socket.id, { adminTokenPresent: !!handshakeAdminToken });
+  if (handshakeAdminToken) {
+    const tokenHash = hashAdminToken(handshakeAdminToken);
+    const adminSession = adminSessions.get(tokenHash);
+    if (adminSession && adminSession.expiresAt > Date.now()) {
+      socket.data.admin = { ...adminSession, tokenHash };
+      console.log('[ADMIN SOCKET AUTH] OK:', socket.id, adminSession.adminName);
+    } else {
+      console.warn('[ADMIN SOCKET AUTH] INVALID/EXPIRED:', socket.id);
+    }
+  }
+  socket.on('error', err => console.error('[SOCKET ERROR]', socket.id, err?.message || err)); socket.emit('server:ready',{version:'2.7.1-H3-TOKEN-ONLY',transport:socket.conn.transport.name});
   socket.on('room:join',async payload=>{try{
     const nama=String(payload?.nama||'').trim(),group=String(payload?.group||'').trim(),channel=String(payload?.channel||'').trim(),peerId=String(payload?.peerId||'').trim(),maxUsers=Number(payload?.maxUsers||0);
     if(!nama||!group||!channel||!peerId)return socket.emit('room:error',{message:'Data room tidak lengkap.'});
@@ -613,24 +626,51 @@ io.on('connection',socket=>{
   
   socket.on('admin:broadcast',async(payload,ack)=>{
     const adminToken=String(socket.handshake?.auth?.adminToken||'').trim();
-    const admin=getAdminSessionByToken(adminToken) || socket.data.admin || null;
+    let admin=socket.data.admin||null;
+    if(!admin && adminToken) {
+      const tokenHash = hashAdminToken(adminToken);
+      const session = adminSessions.get(tokenHash);
+      if(session && session.expiresAt > Date.now()) {
+        admin = { ...session, tokenHash };
+        socket.data.admin = admin;
+      }
+    }
+
+    const audioBytes = payload?.audioData?.byteLength || payload?.audioData?.length || 0;
+    console.log('[BROADCAST DEBUG] RECEIVED', {
+      socketId: socket.id,
+      authenticated: !!admin,
+      type: payload?.type || null,
+      fileName: payload?.fileName || null,
+      audioBytes,
+      audioMB: audioBytes ? Number((audioBytes / 1024 / 1024).toFixed(3)) : 0,
+      targets: Array.isArray(payload?.targets) ? payload.targets.length : 0
+    });
+
     if(!admin) return ack?.({ok:false,message:'Admin tidak terautentikasi.'});
-    socket.data.admin = admin;
-    
     if(!Array.isArray(payload?.targets)) return ack?.({ok:false,message:'Format targets tidak valid.'});
-    
+    if(payload?.type === 'audio' && (!audioBytes || audioBytes <= 0)) {
+      console.warn('[BROADCAST DEBUG] AUDIO EMPTY');
+      return ack?.({ok:false,message:'Data audio kosong.'});
+    }
+
+    let delivered = 0;
     payload.targets.forEach(t=>{
       const room=`${t.grup}::${t.channel}`;
+      const recipients = io.sockets.adapter.rooms.get(room)?.size || 0;
+      console.log('[BROADCAST DEBUG] TARGET', { room, recipients });
       io.to(room).emit('server:broadcast',{
         type:payload.type,
         pesan:payload.pesan,
         fileName:payload.fileName,
         audioData:payload.audioData
       });
+      delivered += recipients;
     });
-    
-    if(db) await writeAudit(admin.adminName || ADMIN_NAME,'BROADCAST',payload.type,`Targets: ${payload.targets.length}`);
-    ack?.({ok:true});
+
+    if(db) await writeAudit(admin.adminName || ADMIN_NAME,'BROADCAST',payload.type,`Targets: ${payload.targets.length}; AudioBytes: ${audioBytes}`);
+    console.log('[BROADCAST DEBUG] SENT', { deliveredRecipients: delivered, type: payload.type, audioBytes });
+    ack?.({ok:true, deliveredRecipients:delivered, audioBytes});
   });
 
   socket.on('disconnect',async reason=>{const s=sessions.get(socket.id);console.log('[SOCKET] Disconnect:',socket.id,reason);if(!s)return;rooms.get(s.room)?.delete(socket.id);if(rooms.get(s.room)?.size===0)rooms.delete(s.room);sessions.delete(socket.id);await removePresence(socket.id);await writeActivity(s.nama,s.group,s.channel,'KELUAR');if(s.room)io.to(s.room).emit('room:users',roomUsers(s.room));emitPresence();});
