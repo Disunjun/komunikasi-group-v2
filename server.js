@@ -19,7 +19,7 @@ const ADMIN_SESSION_TTL_MS = Math.max(5 * 60 * 1000, Number(process.env.ADMIN_SE
 const adminSessions = new Map(); // tokenHash -> {adminName, expiresAt, createdAt}
 
 const corsOrigin = FRONTEND_ORIGINS.includes('*') ? true : FRONTEND_ORIGINS;
-const io = new Server(server, { cors: { origin: corsOrigin, methods: ['GET','POST','PATCH','DELETE'] }, transports: ['websocket','polling'] });
+const io = new Server(server, { cors: { origin: corsOrigin, methods: ['GET','POST','PATCH','DELETE'] }, transports: ['websocket','polling'], maxHttpBufferSize: 20 * 1024 * 1024 });
 
 io.engine.on('connection_error', err => {
   console.error('[SOCKET ENGINE ERROR]', {
@@ -28,6 +28,7 @@ io.engine.on('connection_error', err => {
     context: err?.context || null
   });
 });
+console.log('[SOCKET] maxHttpBufferSize = 20 MB');
 app.use(cors({ origin: corsOrigin }));
 app.use(express.json({ limit: '64kb' }));
 
