@@ -521,6 +521,7 @@
                 <button class="tab" onclick="pilihTab('monitoring')" id="tab-monitoring">📡 Monitoring</button>
                 <button class="tab" onclick="pilihTab('audit')" id="tab-audit">📋 Audit Log</button>
                 <button class="tab" onclick="pilihTab('statistik')" id="tab-statistik">📊 Statistik</button>
+                <button class="tab" onclick="pilihTab('broadcasting')" id="tab-broadcasting">📢 Broadcasting</button>
             </div>
 
             <!-- Tab Users -->
@@ -661,6 +662,80 @@
                 <div class="chart-container">
                     <div class="chart-title">📈 Aktivitas per Bulan (12 Bulan Terakhir)</div>
                     <canvas id="chartBulan" class="chart-canvas" height="220"></canvas>
+                </div>
+            </div>
+
+            <!-- Tab Broadcasting -->
+            <div id="content-broadcasting" class="tab-content">
+                <div class="toolbar">
+                    <h3>📢 Broadcasting</h3>
+                </div>
+                <div class="kotak">
+                    <div class="baris" style="margin-bottom:15px;">
+                        <label style="width:100%;margin-bottom:8px;font-weight:bold;color:#93c5fd;">Jenis Siaran</label>
+                        <div class="baris">
+                            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+                                <input type="radio" name="broadcastType" value="teks" checked onchange="onBroadcastTypeChange()">
+                                <span>📝 Teks</span>
+                            </label>
+                            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+                                <input type="radio" name="broadcastType" value="audio" onchange="onBroadcastTypeChange()">
+                                <span>🎵 File MP3</span>
+                            </label>
+                        </div>
+                    </div>
+                    <div id="broadcastTeksPanel">
+                        <div style="margin-bottom:15px;">
+                            <label style="font-weight:bold;color:#93c5fd;">Pesan Teks</label>
+                            <textarea id="broadcastPesanTeks" rows="4" placeholder="Ketik pesan yang akan disiarkan ke channel..." style="width:100%;padding:10px;border-radius:8px;border:1px solid #334155;background:#0f172a;color:#e2e8f0;margin-top:6px;resize:vertical;"></textarea>
+                        </div>
+                    </div>
+                    <div id="broadcastAudioPanel" style="display:none;">
+                        <div style="margin-bottom:15px;">
+                            <label style="font-weight:bold;color:#93c5fd;">Pilih File MP3</label>
+                            <input type="file" id="broadcastFileMp3" accept="audio/mpeg" style="padding:8px;border-radius:8px;border:1px solid #334155;background:#0f172a;color:#e2e8f0;">
+                        </div>
+                    </div>
+                    <div style="margin-bottom:15px;">
+                        <label style="font-weight:bold;color:#93c5fd;">Target Saluran</label>
+                        <select id="broadcastTargetSaluran">
+                            <option value="group">📁 Group</option>
+                            <option value="channel">🔊 Channel</option>
+                            <option value="all">📢 Semua (All)</option>
+                        </select>
+                    </div>
+                    <div style="margin-bottom:15px;" id="broadcastTargetGroupPanel">
+                        <label style="font-weight:bold;color:#93c5fd;">Pilih Group</label>
+                        <select id="broadcastGroupSelect" style="width:100%;padding:10px;border-radius:8px;border:1px solid #334155;background:#0f172a;color:#e2e8f0;">
+                            <option value="">-- Pilih Group --</option>
+                        </select>
+                    </div>
+                    <div style="margin-bottom:15px;" id="broadcastTargetChannelPanel">
+                        <label style="font-weight:bold;color:#93c5fd;">Pilih Channel</label>
+                        <select id="broadcastChannelSelect" style="width:100%;padding:10px;border-radius:8px;border:1px solid #334155;background:#0f172a;color:#e2e8f0;">
+                            <option value="">-- Pilih Channel --</option>
+                        </select>
+                    </div>
+                    <div style="margin-bottom:15px;">
+                        <label style="font-weight:bold;color:#93c5fd;">Periode Siaran</label>
+                        <div class="baris">
+                            <select id="broadcastPeriode" onchange="onBroadcastPeriodeChange()">
+                                <option value="hari">📅 Hari</option>
+                                <option value="jam">⏰ Jam</option>
+                            </select>
+                            <input type="number" id="broadcastDurasi" placeholder="Durasi" min="1" value="1" style="width:120px;">
+                        </div>
+                    </div>
+                    <div style="margin-bottom:15px;">
+                        <label style="font-weight:bold;color:#93c5fd;">Jadwal</label>
+                        <div class="baris">
+                            <input type="datetime-local" id="broadcastJadwal" style="flex:1;min-width:200px;">
+                            <button class="btn btn-hijau" onclick="startBroadcast()">▶️ Mulai Siaran</button>
+                        </div>
+                    </div>
+                    <div id="broadcastStatus" class="status status-kuning" style="display:none;">
+                        <span id="broadcastStatusText">Menunggu jadwal...</span>
+                    </div>
                 </div>
             </div>
         </div>
@@ -1437,6 +1512,39 @@ function pilihTab(tab) {
     else stopMonitoringAutoRefresh();
     if(tab === 'audit') renderAudit();
     if(tab === 'statistik') renderStatistik();
+    if(tab === 'broadcasting') { initBroadcastForm(); }
+}
+
+function initBroadcastForm() {
+    const groupSelect = document.getElementById('broadcastGroupSelect');
+    groupSelect.innerHTML = '<option value="">-- Pilih Group --</option>';
+    centralGroups.forEach((g, i) => {
+        groupSelect.innerHTML += `<option value="${i}">${g.nama}</option>`;
+    });
+
+    const channelSelect = document.getElementById('broadcastChannelSelect');
+    channelSelect.innerHTML = '<option value="">-- Pilih Channel --</option>';
+    centralGroups.forEach(g => {
+        if(Array.isArray(g.channel)) {
+            g.channel.forEach(c => {
+                channelSelect.innerHTML += `<option value="${c.nama}">${c.nama}</option>`;
+            });
+        }
+    });
+}
+
+function onBroadcastTypeChange() {
+    const isTeks = document.querySelector('input[name="broadcastType"]:checked').value === 'teks';
+    document.getElementById('broadcastTeksPanel').style.display = isTeks ? 'block' : 'none';
+    document.getElementById('broadcastAudioPanel').style.display = isTeks ? 'none' : 'block';
+}
+
+function onBroadcastPeriodeChange() {
+    // Logic untuk periode bisa ditambahkan disini
+}
+
+function startBroadcast() {
+    alert("Fitur siaran sedang dalam tahap implementasi.");
 }
 
 function updateStats() {
