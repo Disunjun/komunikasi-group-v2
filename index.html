@@ -1544,13 +1544,188 @@ function onBroadcastPeriodeChange() {
     // Logic untuk periode bisa ditambahkan disini
 }
 
+function validateBroadcastForm() {
+    const broadcastType = document.querySelector('input[name="broadcastType"]:checked').value;
+    const targetSaluran = document.getElementById('broadcastTargetSaluran').value;
+    
+    if(broadcastType === 'teks') {
+        const pesan = document.getElementById('broadcastPesanTeks').value.trim();
+        if(!pesan) {
+            toast('❌ Pesan teks tidak boleh kosong!', 'merah');
+            return null;
+        }
+        return { type: 'teks', pesan };
+    } else {
+        const file = document.getElementById('broadcastFileMp3').files[0];
+        if(!file) {
+            toast('❌ Pilih file MP3 terlebih dahulu!', 'merah');
+            return null;
+        }
+        if(file.type !== 'audio/mpeg') {
+            toast('❌ File harus berformat MP3!', 'merah');
+            return null;
+        }
+        return { type: 'audio', file };
+    }
+}
+
+function getBroadcastTargets() {
+    const targetSaluran = document.getElementById('broadcastTargetSaluran').value;
+    const targets = [];
+    
+    if(targetSaluran === 'all') {
+        centralGroups.forEach(g => {
+            if(Array.isArray(g.channel)) {
+                g.channel.forEach(c => {
+                    targets.push({ grup: g.nama, channel: c.nama });
+                });
+            }
+        });
+    } else if(targetSaluran === 'group') {
+        const groupIdx = document.getElementById('broadcastGroupSelect').value;
+        if(!groupIdx && groupIdx !== '0') {
+            toast('❌ Pilih Group terlebih dahulu!', 'merah');
+            return null;
+        }
+        const grup = centralGroups[groupIdx];
+        if(Array.isArray(grup.channel)) {
+            grup.channel.forEach(c => {
+                targets.push({ grup: grup.nama, channel: c.nama });
+            });
+        }
+    } else if(targetSaluran === 'channel') {
+        const channelNama = document.getElementById('broadcastChannelSelect').value;
+        if(!channelNama) {
+            toast('❌ Pilih Channel terlebih dahulu!', 'merah');
+            return null;
+        }
+        for(let g of centralGroups) {
+            for(let c of (g.channel || [])) {
+                if(c.nama === channelNama) {
+                    targets.push({ grup: g.nama, channel: c.nama });
+                    return targets;
+                }
+            }
+        }
+        toast('❌ Channel tidak ditemukan!', 'merah');
+        return null;
+    }
+    
+    return targets.length > 0 ? targets : null;
+}
+
 function testBroadcast() {
-    alert("Menjalankan tes siaran...");
-    // Tambahkan logika pengujian broadcast disini
+    const broadcastData = validateBroadcastForm();
+    if(!broadcastData) return;
+    
+    const targets = getBroadcastTargets();
+    if(!targets) return;
+    
+    if(broadcastData.type === 'teks') {
+        toast(`✅ Test siaran TEKS:\n"${broadcastData.pesan}"\nKe ${targets.length} channel`, 'hijau', 3000);
+        sendBroadcast(broadcastData, targets, true);
+    } else {
+        const fileName = broadcastData.file.name;
+        toast(`✅ Test siaran AUDIO:\n${fileName}\nKe ${targets.length} channel`, 'hijau', 3000);
+        sendBroadcastAudio(broadcastData.file, targets, true);
+    }
 }
 
 function startBroadcast() {
-    alert("Fitur siaran sedang dalam tahap implementasi.");
+    const broadcastData = validateBroadcastForm();
+    if(!broadcastData) return;
+    
+    const targets = getBroadcastTargets();
+    if(!targets) return;
+    
+    const jadwal = document.getElementById('broadcastJadwal').value;
+    const periode = document.getElementById('broadcastPeriode').value;
+    const durasi = parseInt(document.getElementById('broadcastDurasi').value) || 1;
+    
+    if(!jadwal) {
+        toast('❌ Tentukan jadwal siaran!', 'merah');
+        return;
+    }
+    
+    const scheduleTime = new Date(jadwal).getTime();
+    const now = Date.now();
+    
+    if(scheduleTime <= now) {
+        toast('❌ Jadwal harus di masa depan!', 'merah');
+        return;
+    }
+    
+    if(broadcastData.type === 'teks') {
+        toast(`✅ Siaran TEKS dijadwalkan:\n"${broadcastData.pesan}"\nKe ${targets.length} channel\nJadwal: ${jadwal}`, 'hijau', 3000);
+        sendBroadcast(broadcastData, targets, false, { jadwal, periode, durasi });
+    } else {
+        const fileName = broadcastData.file.name;
+        toast(`✅ Siaran AUDIO dijadwalkan:\n${fileName}\nKe ${targets.length} channel\nJadwal: ${jadwal}`, 'hijau', 3000);
+        sendBroadcastAudio(broadcastData.file, targets, false, { jadwal, periode, durasi });
+    }
+}
+
+function sendBroadcast(data, targets, isTest = false, schedule = null) {
+    if(!socket || !realtimeConnected) {
+        toast('❌ Socket tidak terhubung!', 'merah');
+        return;
+    }
+    
+    const broadcastPayload = {
+        type: data.type,
+        pesan: data.pesan,
+        targets: targets,
+        isTest: isTest,
+        schedule: schedule,
+        timestamp: Date.now(),
+        adminNama: ADMIN_NAMA
+    };
+    
+    socket.emit('admin:broadcast', broadcastPayload, (response) => {
+        if(response?.ok) {
+            toast(`✅ Siaran teks berhasil dikirim ke ${targets.length} channel!`, 'hijau', 3000);
+            catatAudit('BROADCAST TEKS', targets.map(t => `${t.grup}/${t.channel}`).join(', '), data.pesan.substring(0, 100));
+        } else {
+            toast(`❌ Gagal mengirim siaran: ${response?.message || 'Unknown error'}`, 'merah', 3000);
+        }
+    });
+}
+
+function sendBroadcastAudio(file, targets, isTest = false, schedule = null) {
+    if(!socket || !realtimeConnected) {
+        toast('❌ Socket tidak terhubung!', 'merah');
+        return;
+    }
+    
+    const reader = new FileReader();
+    reader.onload = (e) => {
+        const audioData = e.target.result;
+        
+        const broadcastPayload = {
+            type: 'audio',
+            fileName: file.name,
+            fileSize: file.size,
+            audioData: audioData,
+            targets: targets,
+            isTest: isTest,
+            schedule: schedule,
+            timestamp: Date.now(),
+            adminNama: ADMIN_NAMA
+        };
+        
+        socket.emit('admin:broadcast', broadcastPayload, (response) => {
+            if(response?.ok) {
+                toast(`✅ Siaran audio berhasil dikirim ke ${targets.length} channel!`, 'hijau', 3000);
+                catatAudit('BROADCAST AUDIO', targets.map(t => `${t.grup}/${t.channel}`).join(', '), file.name);
+            } else {
+                toast(`❌ Gagal mengirim siaran: ${response?.message || 'Unknown error'}`, 'merah', 3000);
+            }
+        });
+    };
+    reader.onerror = () => {
+        toast('❌ Gagal membaca file MP3!', 'merah');
+    };
+    reader.readAsArrayBuffer(file);
 }
 
 function updateStats() {
