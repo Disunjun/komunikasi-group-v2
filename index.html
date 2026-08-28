@@ -1005,7 +1005,19 @@ let serverSessions = {};
 let serverAdminStats = null;
 let serverActivityLogs = [];
 let peerIdSaya = null;
-let realtimeConnected = false;
+let adminSocket = null;
+
+async function initAdminSocket() {
+    const adminToken = sessionStorage.getItem("kgAdminToken");
+    if(!adminToken) return;
+
+    adminSocket = io(REALTIME_SERVER_URL, {
+        auth: { adminToken: adminToken }
+    });
+
+    adminSocket.on("connect", () => console.log("[ADMIN SOCKET] Connected"));
+    adminSocket.on("connect_error", (err) => console.error("[ADMIN SOCKET ERROR]", err.message));
+}
 
 let turnIceServers = [];
 let turnConfigStatus = "NOT LOADED";
@@ -1620,27 +1632,30 @@ function testBroadcast() {
         return;
     }
     
+    // Gunakan adminSocket jika tersedia, fallback ke socket utama
+    const targetSocket = adminSocket || socket;
+    
     if(data.type === 'teks') {
-        socket.emit('admin:broadcast', {
+        targetSocket.emit('admin:broadcast', {
             type: 'teks',
             pesan: data.pesan,
             targets: targets,
             isTest: true
         }, (res) => {
-            if(res?.ok) toast(`✅ Test Teks terkirim ke ${targets.length} channel`, 'hijau');
+            if(res?.ok) toast(`✅ Test Teks terkirim!`, 'hijau');
             else toast(`❌ Gagal: ${res?.message || 'Error'}`, 'merah');
         });
     } else {
         const reader = new FileReader();
         reader.onload = (e) => {
-            socket.emit('admin:broadcast', {
+            targetSocket.emit('admin:broadcast', {
                 type: 'audio',
                 fileName: data.file.name,
                 audioData: e.target.result,
                 targets: targets,
                 isTest: true
             }, (res) => {
-                if(res?.ok) toast(`✅ Test Audio terkirim ke ${targets.length} channel`, 'hijau');
+                if(res?.ok) toast(`✅ Test Audio terkirim!`, 'hijau');
                 else toast(`❌ Gagal: ${res?.message || 'Error'}`, 'merah');
             });
         };
