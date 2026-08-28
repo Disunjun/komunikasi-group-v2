@@ -80,6 +80,19 @@ function getAdminSessionByToken(token) {
   if(s.expiresAt<=Date.now()){adminSessions.delete(tokenHash);return null;} return {...s,tokenHash};
 }
 
+io.use((socket, next) => {
+  const token = String(socket.handshake?.auth?.adminToken || '').trim();
+  const session = getAdminSessionByToken(token);
+  if (session) {
+    socket.data.admin = session;
+    socket.data.isAdmin = true;
+  } else {
+    socket.data.admin = null;
+    socket.data.isAdmin = false;
+  }
+  return next();
+});
+
 function requireAdmin(req,res,next) {
   const session = getAdminSession(req);
   if(session) {
@@ -605,6 +618,14 @@ io.on('connection',socket=>{
     io.to(room).emit('room:users',roomUsers(room));
     emitPresence();
     console.log('[ROOM JOIN]',nama,'=>',room);
+    for(const session of broadcastSessions.values()){
+      if(session.status!=='live' || !(session.targets||[]).some(t=>`${t.grup}::${t.channel}`===room)) continue;
+      if(!session.peerTargets.some(p=>p.socketId===socket.id)){
+        const p={socketId:socket.id,peerId,nama,group,channel,room};
+        session.peerTargets.push(p);
+        io.to(session.adminSocketId).emit('broadcast:peer:add',{broadcastId:session.broadcastId,peerId,nama});
+      }
+    }
   }catch(e){console.error('[ROOM JOIN ERROR]',e);socket.emit('room:error',{message:e.message||'Gagal bergabung room.'});}});
   socket.on('presence:update',async patch=>{const s=sessions.get(socket.id);if(!s)return;if(typeof patch?.micStatus==='boolean')s.micStatus=patch.micStatus;if(typeof patch?.floorStatus==='string')s.floorStatus=patch.floorStatus;s.timestamp=Date.now();await savePresence(s);io.to(s.room).emit('room:users',roomUsers(s.room));emitPresence();});
   socket.on('floor:event',event=>{const s=sessions.get(socket.id);if(!s?.room)return;socket.to(s.room).emit('floor:event',{...event,from:s.nama});});
@@ -643,7 +664,37 @@ io.on('connection',socket=>{
     }
     return ack?.({ok:false,message:'Tipe broadcast tidak didukung.'});
   });
-  socket.on('disconnect',async reason=>{const s=sessions.get(socket.id);console.log('[SOCKET] Disconnect:',socket.id,reason);if(!s)return;rooms.get(s.room)?.delete(socket.id);if(rooms.get(s.room)?.size===0)rooms.delete(s.room);sessions.delete(socket.id);await removePresence(socket.id);await writeActivity(s.nama,s.group,s.channel,'KELUAR');if(s.room)io.to(s.room).emit('room:users',roomUsers(s.room));emitPresence();});
+  socket.on('disconnect',async reason=>{
+    console.log('[SOCKET] Disconnect:',socket.id,reason);
+
+    // Admin sockets do not have a normal room session. Any live broadcast owned
+    // by this socket must therefore be stopped explicitly on disconnect.
+    for(const [broadcastId,session] of broadcastSessions.entries()){
+      if(session.adminSocketId!==socket.id) continue;
+      for(const t of session.targets||[]){
+        io.to(`${t.grup}::${t.channel}`).emit('broadcast:audio:stop',{broadcastId,reason:'admin_disconnect'});
+      }
+      broadcastSessions.delete(broadcastId);
+      try{await writeAudit(session.adminName||ADMIN_NAME,'BROADCAST AUDIO STOP',broadcastId,'Reason: admin_disconnect');}catch(_){ }
+    }
+
+    const s=sessions.get(socket.id);
+    if(!s)return;
+    for(const session of broadcastSessions.values()){
+      const idx=(session.peerTargets||[]).findIndex(p=>p.socketId===socket.id);
+      if(idx>=0){
+        const [p]=session.peerTargets.splice(idx,1);
+        io.to(session.adminSocketId).emit('broadcast:peer:remove',{broadcastId:session.broadcastId,peerId:p.peerId,nama:p.nama});
+      }
+    }
+    rooms.get(s.room)?.delete(socket.id);
+    if(rooms.get(s.room)?.size===0)rooms.delete(s.room);
+    sessions.delete(socket.id);
+    await removePresence(socket.id);
+    await writeActivity(s.nama,s.group,s.channel,'KELUAR');
+    if(s.room)io.to(s.room).emit('room:users',roomUsers(s.room));
+    emitPresence();
+  });
 });
 setInterval(()=>{
   const now=Date.now();
