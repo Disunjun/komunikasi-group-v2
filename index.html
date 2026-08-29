@@ -717,30 +717,30 @@
                         </select>
                     </div>
                     <div style="margin-bottom:15px;">
-                        <label style="font-weight:bold;color:#93c5fd;">Periode Siaran</label>
-                        <div style="margin-top:8px;display:grid;grid-template-columns:repeat(4,minmax(90px,1fr));gap:8px;">
-                            <label><input class="broadcastHari" type="checkbox" value="1"> Senin</label>
-                            <label><input class="broadcastHari" type="checkbox" value="2"> Selasa</label>
-                            <label><input class="broadcastHari" type="checkbox" value="3"> Rabu</label>
-                            <label><input class="broadcastHari" type="checkbox" value="4"> Kamis</label>
-                            <label><input class="broadcastHari" type="checkbox" value="5"> Jumat</label>
-                            <label><input class="broadcastHari" type="checkbox" value="6"> Sabtu</label>
-                            <label><input class="broadcastHari" type="checkbox" value="0"> Minggu</label>
+                        <label style="font-weight:bold;color:#93c5fd;">Hari Siaran</label>
+                        <div class="baris" style="flex-wrap:wrap;gap:8px;">
+                            <label><input type="checkbox" class="broadcast-day" value="1"> Senin</label>
+                            <label><input type="checkbox" class="broadcast-day" value="2"> Selasa</label>
+                            <label><input type="checkbox" class="broadcast-day" value="3"> Rabu</label>
+                            <label><input type="checkbox" class="broadcast-day" value="4"> Kamis</label>
+                            <label><input type="checkbox" class="broadcast-day" value="5"> Jumat</label>
+                            <label><input type="checkbox" class="broadcast-day" value="6"> Sabtu</label>
+                            <label><input type="checkbox" class="broadcast-day" value="0"> Minggu</label>
                         </div>
-                        <div class="baris" style="margin-top:10px;gap:10px;align-items:center;">
-                            <label>Jam Mulai <input type="time" id="broadcastJamMulai" value="08:00"></label>
-                            <span>—</span>
-                            <label>Jam Selesai <input type="time" id="broadcastJamSelesai" value="17:00"></label>
+                        <div style="font-size:12px;color:#94a3b8;margin-top:6px;">
+                            Jika tidak ada hari dicentang, otomatis berlaku setiap hari.
                         </div>
-                        <small style="display:block;margin-top:7px;color:#94a3b8;">TEST mengikuti target tetapi mengabaikan Hari/Jam. Mulai Siaran mengikuti Hari/Jam.</small>
                     </div>
+                    <div style="margin-bottom:15px;">
+                        <label style="font-weight:bold;color:#93c5fd;">Jam Siaran</label>
                         <div class="baris">
-<button class="btn btn-kuning" id="btnBroadcastTest" onclick="testBroadcast()">🧪 Test</button>
-                            <button class="btn btn-hijau" id="btnBroadcastStart" onclick="startBroadcast()">▶️ Mulai Siaran</button>
+                            <input type="time" id="broadcastJam" value="08:00" style="width:140px;">
+                            <span style="font-size:12px;color:#94a3b8;">MP3 diputar 1× saat waktu tercapai.</span>
+                            <button class="btn btn-kuning" id="broadcastTestButton" onclick="testBroadcast()">🧪 Test</button>
                         </div>
                     </div>
                     <div id="broadcastStatus" class="status status-kuning" style="display:none;">
-                        <span id="broadcastStatusText">Menunggu periode siaran...</span>
+                        <span id="broadcastStatusText">Menunggu waktu siaran...</span>
                     </div>
                 </div>
             </div>
@@ -1000,7 +1000,6 @@ let editGroupTarget = null;
 let editChannelTarget = { grupIdx: -1, chIdx: -1 };
 let heartbeatInterval = null;
 let monitoringInterval = null;
-let broadcastDebug = { stage:'idle', type:'-', fileName:'-', bytes:0, mb:0, sentAt:'-', receivedAt:'-', playState:'-', lastError:'-', ack:null };
 
 // ========== REALTIME SERVER V2 ==========
 const REALTIME_SERVER_URL = window.REALTIME_SERVER_URL || "https://komunikasi-group-v2-production.up.railway.app";
@@ -1558,44 +1557,209 @@ function onBroadcastTypeChange() {
     document.getElementById('broadcastAudioPanel').style.display = isTeks ? 'none' : 'block';
 }
 
-
-function validateBroadcastForm(){const type=document.querySelector('input[name="broadcastType"]:checked')?.value||'teks';if(type==='teks'){const pesan=document.getElementById('broadcastPesanTeks')?.value.trim()||'';if(!pesan){toast('❌ Pesan teks tidak boleh kosong!','merah');return null;}return{type:'teks',pesan};}const file=document.getElementById('broadcastFileMp3')?.files?.[0];if(!file){toast('❌ Pilih file MP3 terlebih dahulu!','merah');return null;}return{type:'audio',file};}
-function getBroadcastTargets(){const mode=document.getElementById('broadcastTargetSaluran')?.value,targets=[];if(mode==='all')centralGroups.forEach(g=>(g.channel||[]).forEach(c=>targets.push({grup:g.nama,channel:c.nama})));else if(mode==='group'){const i=document.getElementById('broadcastGroupSelect')?.value;if(!i&&i!=='0'){toast('❌ Pilih Group terlebih dahulu!','merah');return null;}const g=centralGroups[i];(g?.channel||[]).forEach(c=>targets.push({grup:g.nama,channel:c.nama}));}else if(mode==='channel'){const n=document.getElementById('broadcastChannelSelect')?.value;if(!n){toast('❌ Pilih Channel terlebih dahulu!','merah');return null;}for(const g of centralGroups)for(const c of(g.channel||[]))if(c.nama===n)return[{grup:g.nama,channel:c.nama}];}return targets.length?targets:null;}
-function getBroadcastDays(){return[...document.querySelectorAll('.broadcastHari:checked')].map(x=>Number(x.value));}
-function getBroadcastTimeRange(){return{start:document.getElementById('broadcastJamMulai')?.value||'',end:document.getElementById('broadcastJamSelesai')?.value||''};}
-function isBroadcastPeriodValid(){const{start,end}=getBroadcastTimeRange();return/^\d{2}:\d{2}$/.test(start)&&/^\d{2}:\d{2}$/.test(end)&&start<end;}
-function isBroadcastPeriodActive(now=new Date()){const days=getBroadcastDays();if(!days.includes(now.getDay())||!isBroadcastPeriodValid())return false;const{start,end}=getBroadcastTimeRange();const hm=`${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;return hm>=start&&hm<end;}
-let adminBroadcastPeer=null,adminBroadcastCalls=new Map(),adminBroadcastAudio={id:null,audio:null,source:null,destination:null,url:null,file:null,context:null},activeBroadcastId=null,activeBroadcastMode=null;;
-async function ensureAdminBroadcastPeer(){if(adminBroadcastPeer&&!adminBroadcastPeer.destroyed){if(adminBroadcastPeer.open)return adminBroadcastPeer;await new Promise((r,j)=>{const t=setTimeout(()=>j(new Error('Timeout membuka PeerJS Broadcast Admin.')),10000);adminBroadcastPeer.once('open',()=>{clearTimeout(t);r();});adminBroadcastPeer.once('error',e=>{clearTimeout(t);j(e);});});return adminBroadcastPeer;}await loadCloudflareTurnConfig();const iceServers=turnIceServers.length?turnIceServers:[{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun1.l.google.com:19302'}];adminBroadcastPeer=new Peer('kg-admin-broadcast-'+crypto.randomUUID(),{host:'0.peerjs.com',port:443,path:'/',secure:true,pingInterval:5000,debug:2,config:{iceServers,iceCandidatePoolSize:10}});adminBroadcastPeer.on('error',e=>{broadcastDebug.stage='broadcast-peer-error';broadcastDebug.lastError=e?.message||String(e);refreshDebugPanel();});adminBroadcastPeer.on('disconnected',()=>{if(activeBroadcastId)stopLiveBroadcast('admin_peer_disconnected');});adminBroadcastPeer.on('close',()=>{if(activeBroadcastId)stopLiveBroadcast('admin_peer_closed');});await new Promise((r,j)=>{const t=setTimeout(()=>j(new Error('Timeout membuka PeerJS Broadcast Admin.')),12000);adminBroadcastPeer.once('open',()=>{clearTimeout(t);r();});adminBroadcastPeer.once('error',e=>{clearTimeout(t);j(e);});});return adminBroadcastPeer;}
-async function createAdminBroadcastMedia(file){if(!file)throw new Error('File MP3 belum dipilih.');if(adminBroadcastAudio.audio)stopAdminBroadcastMedia();const ctx=audioContext||new(window.AudioContext||window.webkitAudioContext)();audioContext=ctx;if(ctx.state==='suspended')await ctx.resume();const audio=new Audio();audio.preload='auto';audio.playsInline=true;const url=URL.createObjectURL(file);audio.src=url;const source=ctx.createMediaElementSource(audio);const destination=ctx.createMediaStreamDestination();source.connect(ctx.destination);source.connect(destination);adminBroadcastAudio={id:crypto.randomUUID(),audio,source,destination,url,file,context:ctx};audio.onended=()=>{if(activeBroadcastId)stopLiveBroadcast('mp3_ended');};audio.onerror=()=>{broadcastDebug.stage='audio-source-error';broadcastDebug.lastError='MP3 gagal diputar/decode.';refreshDebugPanel();if(activeBroadcastId)stopLiveBroadcast('mp3_source_error');};return{audio,stream:destination.stream};}
-function stopAdminBroadcastMedia(){const b=adminBroadcastAudio;try{b.audio?.pause();}catch(_){}try{b.audio?.removeAttribute('src');b.audio?.load();}catch(_){}try{b.source?.disconnect();}catch(_){}try{b.destination?.disconnect();}catch(_){}if(b.url)try{URL.revokeObjectURL(b.url);}catch(_){}adminBroadcastAudio={id:null,audio:null,source:null,destination:null,url:null,file:null,context:null};}
-async function startLiveBroadcast(mode='test'){const data=validateBroadcastForm();if(!data||data.type!=='audio')return false;const targets=getBroadcastTargets();if(!targets?.length)return false;const controlSocket=adminSocket?.connected?adminSocket:socket;if(!controlSocket?.connected){toast('❌ Socket Admin belum terhubung!','merah');return false;}let po,media;try{po=await ensureAdminBroadcastPeer();media=await createAdminBroadcastMedia(data.file);}catch(e){toast(`❌ Broadcast Audio: ${e.message||e}`,'merah',7000);return false;}const id=crypto.randomUUID();broadcastDebug={stage:'audio-live-starting',type:'audio',fileName:data.file.name,bytes:data.file.size,mb:Number((data.file.size/1048576).toFixed(3)),sentAt:new Date().toLocaleString(),receivedAt:'-',playState:'starting',lastError:'-',ack:null};refreshDebugPanel();const ok=await new Promise(resolve=>{controlSocket.emit('admin:broadcast',{type:'audio',action:'start',mode,broadcastId:id,adminPeerId:po.id,fileName:data.file.name,targets},async res=>{broadcastDebug.ack=res||null;if(!res?.ok){broadcastDebug.stage='audio-live-start-error';broadcastDebug.lastError=res?.message||'Broadcast gagal dimulai.';refreshDebugPanel();resolve(false);return;}activeBroadcastId=res.broadcastId||id;activeBroadcastMode=mode;updateBroadcastButtons();broadcastDebug.stage='audio-live';broadcastDebug.playState='starting-source';refreshDebugPanel();try{await media.audio.play();}catch(e){broadcastDebug.stage='audio-source-play-error';broadcastDebug.lastError=e?.message||String(e);refreshDebugPanel();resolve(false);return;}for(const p of(res.peerTargets||[]))connectAdminBroadcastPeer(p.peerId,activeBroadcastId,media.stream,p.nama);updateBroadcastStatus(mode==='test'?'🟢 TEST LIVE':'🟢 SIARAN LIVE');toast(`📢 Broadcast Audio LIVE → ${(res.peerTargets||[]).length} user online`,'hijau',8000);resolve(true);});});if(!ok){stopAdminBroadcastMedia();activeBroadcastId=null;activeBroadcastMode=null;updateBroadcastButtons();}return ok;}
-function connectAdminBroadcastPeer(peerId,broadcastId,stream,nama=''){if(!peerId||!adminBroadcastPeer)return;stream=stream||adminBroadcastAudio.destination?.stream;if(!stream)return;const key=`${broadcastId}:${peerId}`;if(adminBroadcastCalls.has(key))return;try{const call=adminBroadcastPeer.call(peerId,stream,{metadata:{kind:'broadcast-audio',broadcastId,mode:activeBroadcastMode||'test',fileName:adminBroadcastAudio.file?.name||'',adminName:ADMIN_NAMA}});adminBroadcastCalls.set(key,call);debugTrackMediaCall(call,'BROADCAST OUT');call.on('close',()=>adminBroadcastCalls.delete(key));call.on('error',e=>console.warn('[BROADCAST PEER]',nama,e));}catch(e){console.warn('[BROADCAST PEER] call failed',e);}}
-async function stopLiveBroadcast(reason='admin_stop'){const id=activeBroadcastId;if(!id){stopAdminBroadcastMedia();return true;}for(const[key,call]of adminBroadcastCalls.entries())if(key.startsWith(`${id}:`)){try{call.close();}catch(_){}adminBroadcastCalls.delete(key);}const controlSocket=adminSocket?.connected?adminSocket:socket;if(controlSocket?.connected)controlSocket.emit('admin:broadcast',{type:'audio',action:'stop',mode:activeBroadcastMode||'test',broadcastId:id,targets:getBroadcastTargets()||[],reason},res=>console.log('[BROADCAST] STOP ACK',res));stopAdminBroadcastMedia();activeBroadcastId=null;activeBroadcastMode=null;updateBroadcastButtons();updateBroadcastStatus('⏹ Siaran berhenti');broadcastDebug.stage='idle';broadcastDebug.playState='stopped:'+reason;refreshDebugPanel();return true;}
-function updateBroadcastButtons(){const t=document.getElementById('btnBroadcastTest'),s=document.getElementById('btnBroadcastStart');if(t)t.textContent=activeBroadcastId&&activeBroadcastMode==='test'?'⏹ Stop Test':'🧪 Test';if(s)s.textContent=activeBroadcastId&&activeBroadcastMode==='scheduled'?'⏹ Stop Siaran':'▶️ Mulai Siaran';}
-async function testBroadcast(){if(activeBroadcastId&&activeBroadcastMode==='test')return stopLiveBroadcast('test_toggle_stop');if(activeBroadcastId)await stopLiveBroadcast('test_replaced');return startLiveBroadcast('test');}
-async function startBroadcast(){
-    if(activeBroadcastId&&activeBroadcastMode==='scheduled') return stopLiveBroadcast('scheduled_manual_stop');
-    if(!isBroadcastPeriodValid()){
-        toast('❌ Jam siaran tidak valid. Pastikan Jam Mulai < Jam Selesai.','merah');
-        return false;
-    }
-    if(!getBroadcastDays().length){
-        toast('❌ Pilih minimal satu hari siaran.','merah');
-        return false;
-    }
-    const now=new Date();
-    if(!isBroadcastPeriodActive(now)){
-        toast('⏰ Sekarang di luar Hari/Jam Siaran.','kuning');
-        return false;
-    }
-    return startLiveBroadcast('scheduled');
+function getBroadcastDays() {
+    return [...document.querySelectorAll('.broadcast-day:checked')].map(el => Number(el.value));
 }
-setInterval(()=>{
-    if(activeBroadcastId&&activeBroadcastMode==='scheduled'&&!isBroadcastPeriodActive(new Date())){
-        stopLiveBroadcast('period_end');
+
+function getBroadcastTime() {
+    return document.getElementById('broadcastJam')?.value || '';
+}
+
+function broadcastScheduleAllowsNow(date = new Date()) {
+    const days = getBroadcastDays();
+    if(days.length > 0 && !days.includes(date.getDay())) return false;
+
+    const hhmm = getBroadcastTime();
+    if(!/^\d{2}:\d{2}$/.test(hhmm)) return false;
+
+    const [hh, mm] = hhmm.split(':').map(Number);
+    return date.getHours() === hh && date.getMinutes() === mm;
+}
+
+function validateBroadcastForm() {
+    const broadcastType = document.querySelector('input[name="broadcastType"]:checked').value;
+
+    if(broadcastType === 'teks') {
+        const pesan = document.getElementById('broadcastPesanTeks').value.trim();
+        if(!pesan) {
+            toast('❌ Pesan teks tidak boleh kosong!', 'merah');
+            return null;
+        }
+        return { type:'teks', pesan };
     }
-},1000);
+
+    const file = document.getElementById('broadcastFileMp3').files[0];
+    if(!file) {
+        toast('❌ Pilih file MP3 terlebih dahulu!', 'merah');
+        return null;
+    }
+    return { type:'audio', file };
+}
+
+function getBroadcastTargets() {
+    const targetSaluran = document.getElementById('broadcastTargetSaluran').value;
+    const targets = [];
+
+    if(targetSaluran === 'all') {
+        centralGroups.forEach(g => {
+            if(Array.isArray(g.channel))
+                g.channel.forEach(c => targets.push({grup:g.nama, channel:c.nama}));
+        });
+    } else if(targetSaluran === 'group') {
+        const groupIdx = document.getElementById('broadcastGroupSelect').value;
+        if(!groupIdx && groupIdx !== '0') {
+            toast('❌ Pilih Group terlebih dahulu!', 'merah');
+            return null;
+        }
+        const grup = centralGroups[groupIdx];
+        if(grup && Array.isArray(grup.channel))
+            grup.channel.forEach(c => targets.push({grup:grup.nama, channel:c.nama}));
+    } else if(targetSaluran === 'channel') {
+        const channelNama = document.getElementById('broadcastChannelSelect').value;
+        if(!channelNama) {
+            toast('❌ Pilih Channel terlebih dahulu!', 'merah');
+            return null;
+        }
+        for(const g of centralGroups) {
+            for(const c of (g.channel || [])) {
+                if(c.nama === channelNama) {
+                    targets.push({grup:g.nama, channel:c.nama});
+                    break;
+                }
+            }
+            if(targets.length) break;
+        }
+    }
+
+    return targets.length ? targets : null;
+}
+
+let broadcastTestAudioActive = false;
+let broadcastScheduleTimer = null;
+let broadcastLastScheduledKey = '';
+
+function stopBroadcastTestAudio() {
+    broadcastTestAudioActive = false;
+    if(typeof window.stopAllBroadcastAudio === 'function') {
+        try { window.stopAllBroadcastAudio(); } catch(e) {}
+    }
+    const btn = document.getElementById('broadcastTestButton');
+    if(btn) btn.textContent = '🧪 Test';
+}
+
+function emitBroadcast(data, targets, isTest, label) {
+    const targetSocket = adminSocket || socket;
+    if(!targetSocket || !targetSocket.connected) {
+        toast('❌ Socket Admin belum terhubung!', 'merah');
+        return Promise.resolve(false);
+    }
+
+    return new Promise(resolve => {
+        const payload = {
+            type:data.type,
+            pesan:data.pesan || '',
+            targets,
+            isTest:!!isTest,
+            broadcastMode:isTest ? 'test' : 'scheduled'
+        };
+
+        if(data.type === 'audio') {
+            const reader = new FileReader();
+            reader.onload = e => {
+                payload.fileName = data.file.name;
+                payload.audioData = e.target.result;
+                targetSocket.emit('admin:broadcast', payload, res => {
+                    if(res?.ok) {
+                        toast(`✅ ${label}`, 'hijau');
+                        resolve(true);
+                    } else {
+                        toast(`❌ Gagal: ${res?.message || 'Error'}`, 'merah');
+                        resolve(false);
+                    }
+                });
+            };
+            reader.onerror = () => {
+                toast('❌ File MP3 gagal dibaca.', 'merah');
+                resolve(false);
+            };
+            reader.readAsArrayBuffer(data.file);
+        } else {
+            targetSocket.emit('admin:broadcast', payload, res => {
+                if(res?.ok) {
+                    toast(`✅ ${label}`, 'hijau');
+                    resolve(true);
+                } else {
+                    toast(`❌ Gagal: ${res?.message || 'Error'}`, 'merah');
+                    resolve(false);
+                }
+            });
+        }
+    });
+}
+
+async function testBroadcast() {
+    const data = validateBroadcastForm();
+    if(!data) return;
+
+    const targets = getBroadcastTargets();
+    if(!targets) {
+        toast('❌ Tidak ada channel target!', 'merah');
+        return;
+    }
+
+    // TEST: manual toggle for audio; ignores day and time.
+    if(data.type === 'audio' && broadcastTestAudioActive) {
+        stopBroadcastTestAudio();
+        toast('⏹️ Test Audio dihentikan.', 'kuning');
+        return;
+    }
+
+    const ok = await emitBroadcast(
+        data,
+        targets,
+        true,
+        data.type === 'teks' ? 'Test Teks terkirim!' : 'Test Audio terkirim!'
+    );
+
+    if(ok && data.type === 'audio') {
+        broadcastTestAudioActive = true;
+        const btn = document.getElementById('broadcastTestButton');
+        if(btn) btn.textContent = '⏹️ Stop Test';
+    }
+}
+
+// Automatic one-shot scheduler. There is intentionally no "Mulai Siaran" button.
+// At the selected minute, MP3 is sent once. The MP3 itself is never looped.
+function startBroadcastScheduleWatcher() {
+    if(broadcastScheduleTimer) clearInterval(broadcastScheduleTimer);
+
+    broadcastScheduleTimer = setInterval(async () => {
+        const now = new Date();
+        if(!broadcastScheduleAllowsNow(now)) return;
+
+        const key = `${now.getFullYear()}-${now.getMonth()+1}-${now.getDate()}-${now.getHours()}-${now.getMinutes()}`;
+        if(broadcastLastScheduledKey === key) return;
+        broadcastLastScheduledKey = key;
+
+        const data = validateBroadcastForm();
+        if(!data) return;
+
+        const targets = getBroadcastTargets();
+        if(!targets) return;
+
+        await emitBroadcast(
+            data,
+            targets,
+            false,
+            data.type === 'teks' ? 'Siaran Teks otomatis terkirim!' : 'Siaran MP3 otomatis terkirim!'
+        );
+    }, 1000);
+}
+
+if(!window.__broadcastScheduleWatcherStarted) {
+    window.__broadcastScheduleWatcherStarted = true;
+    setTimeout(startBroadcastScheduleWatcher, 1000);
+}
 
 function updateStats() {
     const grup = ambilData("daftarGrup");
@@ -2368,7 +2532,6 @@ function initAdminRealtimeSocket() {
     }
 
     socket = io(REALTIME_SERVER_URL, {
-        auth: { adminToken: sessionStorage.getItem("kgAdminToken") || adminToken || "" },
         transports:["websocket","polling"],
         reconnection:true,
         reconnectionAttempts:Infinity,
@@ -2379,7 +2542,7 @@ function initAdminRealtimeSocket() {
 
     socket.on("connect", async () => {
         realtimeConnected = true;
-        console.log("[ADMIN SOCKET] CONNECTED:", socket.id, "authToken=", !!adminToken);
+        console.log("[ADMIN SOCKET] CONNECTED:", socket.id);
         try {
             await loadServerAdminStats();
             updateStats();
@@ -2399,21 +2562,9 @@ function initAdminRealtimeSocket() {
         console.warn("[ADMIN SOCKET] DISCONNECTED:", reason);
     });
 
-    socket.on('broadcast:peer:add', ({broadcastId, peerId, nama}) => {
-        if(!activeBroadcastId || activeBroadcastId !== broadcastId) return;
-        try { connectAdminBroadcastPeer(peerId, broadcastId, adminBroadcastAudio.destination?.stream, nama); }
-        catch(e) { console.warn('[BROADCAST] dynamic peer add failed', e); }
-    });
-    socket.on('broadcast:peer:remove', ({broadcastId, peerId}) => {
-        if(!broadcastId || !peerId) return;
-        const key=`${broadcastId}:${peerId}`;
-        const call=adminBroadcastCalls.get(key);
-        if(call){ try{call.close();}catch(_){} adminBroadcastCalls.delete(key); }
-    });
-
     socket.on("connect_error", err => {
         realtimeConnected = false;
-        broadcastDebug.stage = "socket-connect-error"; broadcastDebug.lastError = err?.message || String(err); refreshDebugPanel(); console.warn("[ADMIN SOCKET] CONNECT ERROR:", err?.message || err);
+        console.warn("[ADMIN SOCKET] CONNECT ERROR:", err?.message || err);
     });
 
     socket.on("presence:update", sessions => {
@@ -2524,69 +2675,55 @@ function initRealtimeSocket() {
     socket.on("admin:kick", () => { toast("Anda telah di-kick oleh admin!", "merah", 5000); keluarChannel(); });
     socket.on("floor:event", receiveFloorState);
     
-    socket.on("server:broadcast", (data) => {
-        const audioBytes = data?.audioData?.byteLength || data?.audioData?.length || 0;
-        broadcastDebug.receivedAt = new Date().toLocaleString();
-        broadcastDebug.type = data?.type || '-';
-        broadcastDebug.fileName = data?.fileName || '-';
-        broadcastDebug.bytes = audioBytes;
-        broadcastDebug.mb = audioBytes ? Number((audioBytes / 1024 / 1024).toFixed(3)) : 0;
-        broadcastDebug.stage = data?.type === 'audio' ? 'audio-received' : 'text-received';
-        broadcastDebug.lastError = '-';
-        console.log('[BROADCAST DEBUG] RECEIVED CLIENT', { type:data?.type, fileName:data?.fileName, audioBytes, audioMB:broadcastDebug.mb });
+    let broadcastAudioPlayers = new Set();
 
-        if(data.type === 'teks') {
-            toast(`📢 BROADCAST: ${data.pesan}`, 'biru', 15000);
-            tambahPesan('[BROADCAST]', data.pesan);
-        } else if(data.type === 'audio' && data.audioData) {
+window.stopAllBroadcastAudio = function() {
+    for(const audio of broadcastAudioPlayers) {
+        try {
+            audio.pause();
+            audio.currentTime = 0;
+            audio.removeAttribute('src');
+            audio.load();
+        } catch(e) {}
+    }
+    broadcastAudioPlayers.clear();
+};
+
+socket.on("server:broadcast", (data) => {
+        const type = String(data?.type || '').toLowerCase();
+
+        if(type === 'teks' || type === 'text') {
+            const pesan = String(data?.pesan || '').trim();
+            if(!pesan) return;
+            toast(`📢 BROADCAST: ${pesan}`, 'biru', 15000);
+            try { tambahPesan('[BROADCAST]', pesan); } catch(e) {}
+            return;
+        }
+
+        if(type === 'audio' && data.audioData) {
             try {
-                const blob = new Blob([data.audioData], { type: 'audio/mpeg' });
+                const blob = new Blob([data.audioData], {type:'audio/mpeg'});
                 const url = URL.createObjectURL(blob);
                 const audio = new Audio(url);
-                audio.dataset.debugPlay = 'created';
-                audio.onloadedmetadata = () => {
-                    audio.dataset.debugPlay = `metadata:${audio.duration || 0}s`;
-                    broadcastDebug.playState = audio.dataset.debugPlay;
-                    refreshDebugPanel();
+                audio.autoplay = true;
+                audio.loop = false;
+                audio.volume = 1;
+                broadcastAudioPlayers.add(audio);
+
+                const cleanup = () => {
+                    broadcastAudioPlayers.delete(audio);
+                    URL.revokeObjectURL(url);
                 };
-                audio.onended = () => { audio.dataset.debugPlay = 'ended'; broadcastDebug.playState = 'ended'; refreshDebugPanel(); URL.revokeObjectURL(url); };
-                audio.onerror = () => {
-                    audio.dataset.debugPlay = `error:${audio.error?.code || 'unknown'}`;
-                    broadcastDebug.playState = audio.dataset.debugPlay;
-                    broadcastDebug.lastError = audio.error?.message || 'HTMLAudioElement error';
-                    console.error('[BROADCAST DEBUG] AUDIO ELEMENT ERROR', audio.error);
-                    refreshDebugPanel();
-                };
-                const playPromise = audio.play();
-                if(playPromise && typeof playPromise.then === 'function') {
-                    playPromise.then(() => {
-                        audio.dataset.debugPlay = 'playing';
-                        broadcastDebug.playState = 'playing';
-                        refreshDebugPanel();
-                        console.log('[BROADCAST DEBUG] AUDIO PLAYING');
-                    }).catch(e => {
-                        audio.dataset.debugPlay = `blocked:${e?.name || 'Error'}:${e?.message || ''}`;
-                        broadcastDebug.playState = audio.dataset.debugPlay;
-                        broadcastDebug.lastError = e?.message || String(e);
-                        console.warn('[BROADCAST DEBUG] AUTOPLAY BLOCKED', e);
-                        refreshDebugPanel();
-                    });
-                }
-                broadcastDebug.stage = 'audio-play-attempt';
-                refreshDebugPanel();
-                toast(`📢 SIARAN AUDIO: ${data.fileName || 'broadcast.mp3'}`, 'biru', 10000);
+                audio.addEventListener('ended', cleanup, {once:true});
+                audio.addEventListener('error', cleanup, {once:true});
+
+                audio.play()
+                    .then(() => toast(`📢 SIARAN AUDIO: ${data.fileName || 'broadcast.mp3'}`, 'biru', 10000))
+                    .catch(e => console.warn('[BROADCAST] Autoplay blocked:', e));
             } catch(err) {
-                broadcastDebug.stage = 'audio-play-error';
-                broadcastDebug.lastError = err?.message || String(err);
                 console.error('[BROADCAST] Audio play error:', err);
                 toast('❌ Gagal memutar audio broadcast', 'merah');
-                refreshDebugPanel();
             }
-        } else if(data.type === 'audio') {
-            broadcastDebug.stage = 'audio-empty';
-            broadcastDebug.lastError = 'server:broadcast audio tanpa audioData';
-            console.warn('[BROADCAST DEBUG] AUDIO EVENT TANPA DATA');
-            refreshDebugPanel();
         }
     });
     
@@ -3324,9 +3461,7 @@ function setupPeerEvents() {
 
     peer.on("call", panggilan => {
         debugTrackMediaCall(panggilan, "IN");
-        const meta=panggilan?.metadata||{};
-        if(meta.kind==='broadcast-audio'){ try{panggilan.answer();}catch(e){console.warn('[BROADCAST AUDIO] answer failed',e);} }
-        else panggilan.answer(streamSaya);
+        panggilan.answer(streamSaya);
         pasangSuara(panggilan);
         perbaruiStatusTerhubung();
     });
@@ -3528,22 +3663,14 @@ function aturKoneksi(conn) {
         }
     });
 }
-const receiverBroadcastCalls=new Map();
-function stopReceiverBroadcastAudio(broadcastId,reason='remote_stop'){if(!broadcastId)return;const e=receiverBroadcastCalls.get(broadcastId);if(e){try{e.call?.close();}catch(_){}try{e.audio?.pause();}catch(_){}try{e.audio&&(e.audio.srcObject=null);e.audio.remove();}catch(_){}receiverBroadcastCalls.delete(broadcastId);}document.querySelectorAll('audio[data-broadcast-id]').forEach(a=>{if(a.dataset.broadcastId===broadcastId){try{a.pause();}catch(_){}try{a.srcObject=null;}catch(_){}try{a.remove();}catch(_){}}});broadcastDebug.stage='idle';broadcastDebug.playState='stopped:'+reason;refreshDebugPanel();}
-
 function pasangSuara(panggilan) {
     panggilan.on("stream", suaraOrang => {
-        const meta=panggilan?.metadata||{};
-        const isBroadcast=meta.kind==='broadcast-audio';
-        const broadcastId=String(meta.broadcastId||'');
         const el = document.createElement("audio");
         el.srcObject = suaraOrang;
         el.autoplay = true;
         el.id = "audio-" + Math.random().toString(36).substr(2, 9);
         el.dataset.debugPlay = "pending";
-        if(isBroadcast) el.dataset.broadcastId=broadcastId;
         document.body.appendChild(el);
-        if(isBroadcast) receiverBroadcastCalls.set(broadcastId,{call:panggilan,audio:el});
         // Diagnostic: explicitly ask browser to play and record autoplay rejection.
         // This does not alter signaling/call logic.
         const tryPlayRemote = async () => {
@@ -3562,8 +3689,6 @@ function pasangSuara(panggilan) {
         tryPlayRemote();
 
         // If recording is active, connect this incoming stream to the mixer
-        if(isBroadcast){ broadcastDebug.receivedAt=new Date().toLocaleString(); broadcastDebug.type='audio-live'; broadcastDebug.stage='audio-live-received'; broadcastDebug.playState='starting'; refreshDebugPanel(); }
-
         if(isRecording && audioContext && destinationNode) {
             try {
                 const sourceIn = audioContext.createMediaStreamSource(suaraOrang);
@@ -3571,9 +3696,6 @@ function pasangSuara(panggilan) {
             } catch(e) { console.log("Failed to connect incoming stream to recorder", e); }
         }
     });
-
-    panggilan.on("close",()=>{if(isBroadcast)stopReceiverBroadcastAudio(broadcastId,'webrtc_closed');});
-    panggilan.on("error",err=>{if(isBroadcast){broadcastDebug.stage='audio-live-call-error';broadcastDebug.lastError=err?.message||String(err);refreshDebugPanel();}});
 }
 
 
@@ -4159,8 +4281,7 @@ function getDebugInfo() {
         mediaDebug: debugMediaSnapshot(),
         audioOutputUnlocked,
         audioUnlockLastError,
-        audioContextState: window.__kgAudioContext?.state || "-",
-        broadcastDebug
+        audioContextState: window.__kgAudioContext?.state || "-"
     };
 }
 
@@ -4210,18 +4331,6 @@ function formatDebugInfo(d) {
             `     TRACK ${j+1}: ${t.readyState} | enabled=${t.enabled} | muted=${t.muted} | ${t.label}`
         ));
     });
-
-    lines.push("", "BROADCAST AUDIO DEBUG");
-    lines.push(`  STAGE      : ${d.broadcastDebug?.stage || "-"}`);
-    lines.push(`  TYPE       : ${d.broadcastDebug?.type || "-"}`);
-    lines.push(`  FILE       : ${d.broadcastDebug?.fileName || "-"}`);
-    lines.push(`  BYTES      : ${d.broadcastDebug?.bytes || 0}`);
-    lines.push(`  SIZE MB    : ${d.broadcastDebug?.mb || 0}`);
-    lines.push(`  SENT AT    : ${d.broadcastDebug?.sentAt || "-"}`);
-    lines.push(`  RECEIVED   : ${d.broadcastDebug?.receivedAt || "-"}`);
-    lines.push(`  PLAY STATE : ${d.broadcastDebug?.playState || "-"}`);
-    lines.push(`  LAST ERROR : ${d.broadcastDebug?.lastError || "-"}`);
-    lines.push(`  ACK        : ${d.broadcastDebug?.ack ? JSON.stringify(d.broadcastDebug.ack) : "-"}`);
 
     lines.push("", "AUDIO UNLOCK");
     lines.push(`  STATUS     : ${d.audioOutputUnlocked ? "UNLOCKED" : "LOCKED"}`);
@@ -4286,7 +4395,7 @@ setInterval(() => {
 
 
 // ========== DEBUG GLOBAL v2 ==========
-const DEBUG_UI_VERSION = "DEBUG-BROADCAST-AUDIO-v1";
+const DEBUG_UI_VERSION = "DEBUG-GLOBAL-v6-AUDIO-UNLOCK";
 const FRONTEND_BUILD = "2.8.0-J1-CHANNEL-USER-COUNT";
 
 function ensureGlobalDebugUI() {
