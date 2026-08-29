@@ -639,9 +639,18 @@ io.on('connection',socket=>{
     const targets=payload.targets.map(t=>({grup:String(t?.grup||'').trim(),channel:String(t?.channel||'').trim()})).filter(t=>t.grup&&t.channel);
     if(!targets.length)return ack?.({ok:false,message:'Target broadcast kosong.'});
     if(type==='teks'){
-      const pesan=String(payload?.pesan||'').trim().slice(0,5000); if(!pesan)return ack?.({ok:false,message:'Pesan broadcast kosong.'});
-      for(const t of targets)io.to(`${t.grup}::${t.channel}`).emit('server:broadcast',{type:'teks',pesan,fromAdmin:admin.adminName});
-      await writeAudit(admin.adminName,'BROADCAST','teks',`Targets: ${targets.length}`); return ack?.({ok:true,type:'teks',sent:targets.length});
+      const pesan=String(payload?.pesan||'').trim().slice(0,5000);
+      if(!pesan)return ack?.({ok:false,message:'Pesan broadcast kosong.'});
+      let sent=0;
+      for(const t of targets){
+        const room=`${t.grup}::${t.channel}`;
+        console.log('[BROADCAST TEXT] SEND',room);
+        io.to(room).emit('server:broadcast',{type:'teks',pesan,fromAdmin:admin.adminName,broadcastId:String(payload?.broadcastId||'')||null});
+        sent++;
+      }
+      ack?.({ok:true,type:'teks',sent});
+      try{await writeAudit(admin.adminName,'BROADCAST','teks',`Targets: ${sent}`);}catch(e){console.warn('[BROADCAST TEXT] audit failed:',e.message);}
+      return;
     }
     if(type==='audio'){
       const action=String(payload?.action||'start').trim().toLowerCase();
