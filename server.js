@@ -635,7 +635,8 @@ io.on('connection',socket=>{
   socket.on('admin:broadcast',async(payload,ack)=>{
     const admin=socket.data?.admin; if(!admin)return ack?.({ok:false,message:'Admin tidak terautentikasi.'});
     if(!Array.isArray(payload?.targets))return ack?.({ok:false,message:'Format targets tidak valid.'});
-    const type=String(payload?.type||'').trim().toLowerCase();
+    const rawType=String(payload?.type||'').trim().toLowerCase();
+    const type=(rawType==='text'||rawType==='teks')?'teks':((rawType==='mp3'||rawType==='audio')?'audio':rawType);
     const targets=payload.targets.map(t=>({grup:String(t?.grup||'').trim(),channel:String(t?.channel||'').trim()})).filter(t=>t.grup&&t.channel);
     if(!targets.length)return ack?.({ok:false,message:'Target broadcast kosong.'});
     if(type==='teks'){
