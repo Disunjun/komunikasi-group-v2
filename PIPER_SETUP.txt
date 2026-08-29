@@ -1,0 +1,39 @@
+KOMGRUP — PIPER TTS + LIVE BROADCAST WAV V1
+
+Google Cloud TTS DIHAPUS. Piper berjalan server-side tanpa billing/kartu.
+
+FLOW
+Admin TTS -> /api/tts/synthesize -> Piper -> WAV -> existing Web Audio MediaStreamDestination -> existing PeerJS/WebRTC Broadcast Audio.
+
+WAV TIDAK dikonversi ke MP3.
+
+WINDOWS
+1. python --version
+2. python -m pip install --upgrade pip
+3. python -m pip install piper-tts==1.7.0
+4. python -m piper.download_voices id_ID-news_tts-medium --data-dir .\piper-voices
+5. python -m piper -m id_ID-news_tts-medium --data-dir .\piper-voices -f test.wav -- "Halo, ini tes KomGrup."
+
+ENV
+PIPER_PYTHON=python
+PIPER_DATA_DIR=./piper-voices
+PIPER_VOICE=id_ID-news_tts-medium
+PIPER_MAX_CHARS=3000
+PIPER_TIMEOUT_MS=30000
+
+TEST
+- klik pertama: synthesize -> WAV -> LIVE
+- klik kedua: STOP langsung
+- Hari/Jam diabaikan
+- Target tetap berlaku
+
+SCHEDULED
+- Hari checkbox
+- tanpa checkbox = setiap hari
+- Jam berlaku
+- synthesize saat waktu tercapai
+- loop=false
+- audio ended -> broadcast stop
+
+VOICE
+id_ID-news_tts-medium, Bahasa Indonesia, 22050 Hz, 1 speaker.
