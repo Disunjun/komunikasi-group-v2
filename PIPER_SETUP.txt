@@ -1,39 +1,44 @@
-KOMGRUP — PIPER TTS + LIVE BROADCAST WAV V1
+KOMGRUP — PIPER TTS WAV V2
 
-Google Cloud TTS DIHAPUS. Piper berjalan server-side tanpa billing/kartu.
+1. Piper sudah terpasang:
+   python -m pip install piper-tts==1.7.0
 
-FLOW
-Admin TTS -> /api/tts/synthesize -> Piper -> WAV -> existing Web Audio MediaStreamDestination -> existing PeerJS/WebRTC Broadcast Audio.
+2. Voice Bahasa Indonesia:
+   id_ID-news_tts-medium
 
-WAV TIDAK dikonversi ke MP3.
+3. Model lokal berada di ROOT project:
+   id_ID-news_tts-medium.onnx
+   id_ID-news_tts-medium.onnx.json
 
-WINDOWS
-1. python --version
-2. python -m pip install --upgrade pip
-3. python -m pip install piper-tts==1.7.0
-4. python -m piper.download_voices id_ID-news_tts-medium --data-dir .\piper-voices
-5. python -m piper -m id_ID-news_tts-medium --data-dir .\piper-voices -f test.wav -- "Halo, ini tes KomGrup."
+4. server.js V2 default:
+   PIPER_DATA_DIR=.
+   Jadi model ROOT project dapat langsung ditemukan.
 
-ENV
-PIPER_PYTHON=python
-PIPER_DATA_DIR=./piper-voices
-PIPER_VOICE=id_ID-news_tts-medium
-PIPER_MAX_CHARS=3000
-PIPER_TIMEOUT_MS=30000
+5. Opsional .env lokal:
+   PIPER_DATA_DIR=.
+   PIPER_VOICE=id_ID-news_tts-medium
+   PIPER_TIMEOUT_MS=30000
 
-TEST
-- klik pertama: synthesize -> WAV -> LIVE
-- klik kedua: STOP langsung
-- Hari/Jam diabaikan
-- Target tetap berlaku
+6. Jalur TTS:
+   Teks -> Piper -> WAV -> AudioContext/MediaStreamDestination -> PeerJS/WebRTC Broadcast.
+   Tidak ada konversi WAV ke MP3.
 
-SCHEDULED
-- Hari checkbox
-- tanpa checkbox = setiap hari
-- Jam berlaku
-- synthesize saat waktu tercapai
-- loop=false
-- audio ended -> broadcast stop
+7. TEST:
+   Klik 1x = mulai live.
+   Klik 2x = stop live.
+   TEST hanya mengikuti target Group/Channel; Hari/Jam diabaikan.
 
-VOICE
-id_ID-news_tts-medium, Bahasa Indonesia, 22050 Hz, 1 speaker.
+8. SCHEDULE:
+   Hari checkbox + satu Jam HH:MM.
+   Tidak ada jam selesai.
+   Tidak ada tombol Mulai Siaran.
+   TTS/audio diputar satu kali ketika waktu tercapai.
+
+9. Jangan upload ke GitHub:
+   *.onnx
+   *.onnx.json
+   .env
+   credential/secret apa pun
+
+10. Untuk production, model Piper harus tersedia di runtime server.
+    Jangan mengandalkan model yang hanya ada di PC lokal.
