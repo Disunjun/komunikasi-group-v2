@@ -1,21 +1,20 @@
 import 'dotenv/config';
 import express from 'express';
-import textToSpeech from '@google-cloud/text-to-speech';
 import cors from 'cors';
 import http from 'http';
 import crypto from 'crypto';
 import { promisify } from 'util';
 import { Server } from 'socket.io';
 import pg from 'pg';
+import textToSpeech from '@google-cloud/text-to-speech';
 
 const { Pool } = pg;
-const scryptAsync = promisify(crypto.scrypt);
-const app = express();
 const ttsClient = new textToSpeech.TextToSpeechClient();
 const TTS_DEFAULT_LANGUAGE = process.env.TTS_DEFAULT_LANGUAGE || 'id-ID';
 const TTS_DEFAULT_VOICE = process.env.TTS_DEFAULT_VOICE || '';
 const TTS_MAX_CHARS = Math.max(100, Math.min(5000, Number(process.env.TTS_MAX_CHARS || 3000)));
-
+const scryptAsync = promisify(crypto.scrypt);
+const app = express();
 const server = http.createServer(app);
 const PORT = Number(process.env.PORT || 3000);
 const FRONTEND_ORIGINS = (process.env.FRONTEND_ORIGINS || '*').split(',').map(s => s.trim()).filter(Boolean);
@@ -232,61 +231,6 @@ function recordAdminLoginFailure(key) {
 }
 function clearAdminLoginFailures(key) { adminLoginAttempts.delete(key); }
 
-
-// ===== GOOGLE CLOUD TTS (isolated extension) =====
-app.get('/api/tts/voices', requireAdmin, async (req, res) => {
-  try {
-    const languageCode = String(req.query?.languageCode || TTS_DEFAULT_LANGUAGE).trim() || TTS_DEFAULT_LANGUAGE;
-    const [result] = await ttsClient.listVoices({ languageCode });
-    res.json({
-      ok: true,
-      languageCode,
-      voices: (result.voices || []).map(v => ({
-        name: v.name,
-        languageCodes: v.languageCodes || [],
-        ssmlGender: v.ssmlGender || null,
-        naturalSampleRateHertz: v.naturalSampleRateHertz || null
-      }))
-    });
-  } catch (err) {
-    console.error('[TTS] voices:', err);
-    res.status(502).json({ ok:false, code:'TTS_PROVIDER_ERROR', message:'Gagal membaca voice Google Cloud TTS.' });
-  }
-});
-
-app.post('/api/tts/synthesize', requireAdmin, async (req, res) => {
-  try {
-    const text = String(req.body?.text || '').trim();
-    const languageCode = String(req.body?.languageCode || TTS_DEFAULT_LANGUAGE).trim() || TTS_DEFAULT_LANGUAGE;
-    const voice = String(req.body?.voice || TTS_DEFAULT_VOICE).trim();
-
-    if (!text) return res.status(400).json({ ok:false, code:'TTS_TEXT_EMPTY', message:'Teks TTS kosong.' });
-    if (text.length > TTS_MAX_CHARS) return res.status(400).json({ ok:false, code:'TTS_TEXT_TOO_LONG', message:`Teks TTS maksimal ${TTS_MAX_CHARS} karakter.` });
-
-    const [response] = await ttsClient.synthesizeSpeech({
-      input: { text },
-      voice: voice ? { languageCode, name: voice } : { languageCode },
-      audioConfig: { audioEncoding: 'MP3' }
-    });
-
-    if (!response?.audioContent) throw new Error('Google Cloud TTS tidak mengembalikan audio.');
-
-    const audioBuffer = Buffer.isBuffer(response.audioContent)
-      ? response.audioContent
-      : Buffer.from(response.audioContent);
-
-    res.json({
-      ok: true,
-      mimeType: 'audio/mpeg',
-      audioEncoding: 'MP3',
-      audioBase64: audioBuffer.toString('base64')
-    });
-  } catch (err) {
-    console.error('[TTS] synthesize:', err);
-    res.status(502).json({ ok:false, code:'TTS_PROVIDER_ERROR', message:'Gagal menghasilkan audio TTS.' });
-  }
-});
-
 app.post('/api/admin/login', async (req,res) => {
   const rate = checkAdminLoginRate(req);
   if(!rate.ok) {
@@ -345,6 +289,43 @@ app.post('/api/admin/logout', requireAdmin, async (req,res) => {
   if(token) adminSessions.delete(hashAdminToken(token));
   await writeAudit(req.adminSession?.adminName || ADMIN_NAME,'LOGOUT ADMIN','admin','Session dicabut');
   res.json({ok:true});
+});
+
+
+// ===== GOOGLE CLOUD TTS V1 =====
+app.get('/api/tts/voices', requireAdmin, async (req,res)=>{
+  try{
+    const languageCode=String(req.query?.languageCode||TTS_DEFAULT_LANGUAGE).trim()||TTS_DEFAULT_LANGUAGE;
+    const [result]=await ttsClient.listVoices({languageCode});
+    res.json({ok:true,languageCode,voices:(result.voices||[]).map(v=>({
+      name:v.name,languageCodes:v.languageCodes||[],ssmlGender:v.ssmlGender||null,
+      naturalSampleRateHertz:v.naturalSampleRateHertz||null
+    }))});
+  }catch(e){
+    console.error('[TTS] LIST VOICES ERROR:',e);
+    res.status(502).json({ok:false,code:'TTS_PROVIDER_ERROR',message:'Gagal membaca voice Google Cloud TTS.'});
+  }
+});
+
+app.post('/api/tts/synthesize', requireAdmin, async (req,res)=>{
+  try{
+    const text=String(req.body?.text||'').trim();
+    const languageCode=String(req.body?.languageCode||TTS_DEFAULT_LANGUAGE).trim()||TTS_DEFAULT_LANGUAGE;
+    const voiceName=String(req.body?.voice||TTS_DEFAULT_VOICE).trim();
+    if(!text)return res.status(400).json({ok:false,code:'TTS_TEXT_EMPTY',message:'Teks TTS kosong.'});
+    if(text.length>TTS_MAX_CHARS)return res.status(400).json({ok:false,code:'TTS_TEXT_TOO_LONG',message:`Teks TTS maksimal ${TTS_MAX_CHARS} karakter.`});
+    const [response]=await ttsClient.synthesizeSpeech({
+      input:{text},
+      voice:voiceName?{languageCode,name:voiceName}:{languageCode},
+      audioConfig:{audioEncoding:'MP3'}
+    });
+    if(!response?.audioContent)throw new Error('Google Cloud TTS tidak mengembalikan audio.');
+    const audioBuffer=Buffer.isBuffer(response.audioContent)?response.audioContent:Buffer.from(response.audioContent);
+    res.json({ok:true,mimeType:'audio/mpeg',audioEncoding:'MP3',audioBase64:audioBuffer.toString('base64')});
+  }catch(e){
+    console.error('[TTS] SYNTHESIZE ERROR:',e);
+    res.status(502).json({ok:false,code:'TTS_PROVIDER_ERROR',message:'Gagal menghasilkan audio TTS.'});
+  }
 });
 
 // ===== USER / AUTH API =====
