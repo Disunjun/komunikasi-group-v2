@@ -732,18 +732,15 @@
                             <span>—</span>
                             <label>Jam Selesai <input type="time" id="broadcastJamSelesai" value="17:00"></label>
                         </div>
-                        <small style="display:block;margin-top:7px;color:#94a3b8;">TEST mengikuti target tetapi mengabaikan Hari/Jam/Jadwal. Mulai Siaran mengikuti semuanya.</small>
+                        <small style="display:block;margin-top:7px;color:#94a3b8;">TEST mengikuti target tetapi mengabaikan Hari/Jam. Mulai Siaran mengikuti Hari/Jam.</small>
                     </div>
-                    <div style="margin-bottom:15px;">
-                        <label style="font-weight:bold;color:#93c5fd;">Jadwal</label>
                         <div class="baris">
-                            <input type="datetime-local" id="broadcastJadwal" style="flex:1;min-width:200px;">
-                            <button class="btn btn-kuning" id="btnBroadcastTest" onclick="testBroadcast()">🧪 Test</button>
+<button class="btn btn-kuning" id="btnBroadcastTest" onclick="testBroadcast()">🧪 Test</button>
                             <button class="btn btn-hijau" id="btnBroadcastStart" onclick="startBroadcast()">▶️ Mulai Siaran</button>
                         </div>
                     </div>
                     <div id="broadcastStatus" class="status status-kuning" style="display:none;">
-                        <span id="broadcastStatusText">Menunggu jadwal...</span>
+                        <span id="broadcastStatusText">Menunggu periode siaran...</span>
                     </div>
                 </div>
             </div>
@@ -1561,15 +1558,14 @@ function onBroadcastTypeChange() {
     document.getElementById('broadcastAudioPanel').style.display = isTeks ? 'none' : 'block';
 }
 
-function onBroadcastPeriodeChange(){}
+
 function validateBroadcastForm(){const type=document.querySelector('input[name="broadcastType"]:checked')?.value||'teks';if(type==='teks'){const pesan=document.getElementById('broadcastPesanTeks')?.value.trim()||'';if(!pesan){toast('❌ Pesan teks tidak boleh kosong!','merah');return null;}return{type:'teks',pesan};}const file=document.getElementById('broadcastFileMp3')?.files?.[0];if(!file){toast('❌ Pilih file MP3 terlebih dahulu!','merah');return null;}return{type:'audio',file};}
 function getBroadcastTargets(){const mode=document.getElementById('broadcastTargetSaluran')?.value,targets=[];if(mode==='all')centralGroups.forEach(g=>(g.channel||[]).forEach(c=>targets.push({grup:g.nama,channel:c.nama})));else if(mode==='group'){const i=document.getElementById('broadcastGroupSelect')?.value;if(!i&&i!=='0'){toast('❌ Pilih Group terlebih dahulu!','merah');return null;}const g=centralGroups[i];(g?.channel||[]).forEach(c=>targets.push({grup:g.nama,channel:c.nama}));}else if(mode==='channel'){const n=document.getElementById('broadcastChannelSelect')?.value;if(!n){toast('❌ Pilih Channel terlebih dahulu!','merah');return null;}for(const g of centralGroups)for(const c of(g.channel||[]))if(c.nama===n)return[{grup:g.nama,channel:c.nama}];}return targets.length?targets:null;}
 function getBroadcastDays(){return[...document.querySelectorAll('.broadcastHari:checked')].map(x=>Number(x.value));}
 function getBroadcastTimeRange(){return{start:document.getElementById('broadcastJamMulai')?.value||'',end:document.getElementById('broadcastJamSelesai')?.value||''};}
 function isBroadcastPeriodValid(){const{start,end}=getBroadcastTimeRange();return/^\d{2}:\d{2}$/.test(start)&&/^\d{2}:\d{2}$/.test(end)&&start<end;}
 function isBroadcastPeriodActive(now=new Date()){const days=getBroadcastDays();if(!days.includes(now.getDay())||!isBroadcastPeriodValid())return false;const{start,end}=getBroadcastTimeRange();const hm=`${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;return hm>=start&&hm<end;}
-function getBroadcastSchedule(){const v=document.getElementById('broadcastJadwal')?.value||'';if(!v)return null;const d=new Date(v);return Number.isNaN(d.getTime())?null:d;}
-let adminBroadcastPeer=null,adminBroadcastCalls=new Map(),adminBroadcastAudio={id:null,audio:null,source:null,destination:null,url:null,file:null,context:null},activeBroadcastId=null,activeBroadcastMode=null,scheduledBroadcastTimer=null,scheduledBroadcastArmed=false;
+let adminBroadcastPeer=null,adminBroadcastCalls=new Map(),adminBroadcastAudio={id:null,audio:null,source:null,destination:null,url:null,file:null,context:null},activeBroadcastId=null,activeBroadcastMode=null;;
 async function ensureAdminBroadcastPeer(){if(adminBroadcastPeer&&!adminBroadcastPeer.destroyed){if(adminBroadcastPeer.open)return adminBroadcastPeer;await new Promise((r,j)=>{const t=setTimeout(()=>j(new Error('Timeout membuka PeerJS Broadcast Admin.')),10000);adminBroadcastPeer.once('open',()=>{clearTimeout(t);r();});adminBroadcastPeer.once('error',e=>{clearTimeout(t);j(e);});});return adminBroadcastPeer;}await loadCloudflareTurnConfig();const iceServers=turnIceServers.length?turnIceServers:[{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun1.l.google.com:19302'}];adminBroadcastPeer=new Peer('kg-admin-broadcast-'+crypto.randomUUID(),{host:'0.peerjs.com',port:443,path:'/',secure:true,pingInterval:5000,debug:2,config:{iceServers,iceCandidatePoolSize:10}});adminBroadcastPeer.on('error',e=>{broadcastDebug.stage='broadcast-peer-error';broadcastDebug.lastError=e?.message||String(e);refreshDebugPanel();});adminBroadcastPeer.on('disconnected',()=>{if(activeBroadcastId)stopLiveBroadcast('admin_peer_disconnected');});adminBroadcastPeer.on('close',()=>{if(activeBroadcastId)stopLiveBroadcast('admin_peer_closed');});await new Promise((r,j)=>{const t=setTimeout(()=>j(new Error('Timeout membuka PeerJS Broadcast Admin.')),12000);adminBroadcastPeer.once('open',()=>{clearTimeout(t);r();});adminBroadcastPeer.once('error',e=>{clearTimeout(t);j(e);});});return adminBroadcastPeer;}
 async function createAdminBroadcastMedia(file){if(!file)throw new Error('File MP3 belum dipilih.');if(adminBroadcastAudio.audio)stopAdminBroadcastMedia();const ctx=audioContext||new(window.AudioContext||window.webkitAudioContext)();audioContext=ctx;if(ctx.state==='suspended')await ctx.resume();const audio=new Audio();audio.preload='auto';audio.playsInline=true;const url=URL.createObjectURL(file);audio.src=url;const source=ctx.createMediaElementSource(audio);const destination=ctx.createMediaStreamDestination();source.connect(ctx.destination);source.connect(destination);adminBroadcastAudio={id:crypto.randomUUID(),audio,source,destination,url,file,context:ctx};audio.onended=()=>{if(activeBroadcastId)stopLiveBroadcast('mp3_ended');};audio.onerror=()=>{broadcastDebug.stage='audio-source-error';broadcastDebug.lastError='MP3 gagal diputar/decode.';refreshDebugPanel();if(activeBroadcastId)stopLiveBroadcast('mp3_source_error');};return{audio,stream:destination.stream};}
 function stopAdminBroadcastMedia(){const b=adminBroadcastAudio;try{b.audio?.pause();}catch(_){}try{b.audio?.removeAttribute('src');b.audio?.load();}catch(_){}try{b.source?.disconnect();}catch(_){}try{b.destination?.disconnect();}catch(_){}if(b.url)try{URL.revokeObjectURL(b.url);}catch(_){}adminBroadcastAudio={id:null,audio:null,source:null,destination:null,url:null,file:null,context:null};}
@@ -1578,25 +1574,28 @@ function connectAdminBroadcastPeer(peerId,broadcastId,stream,nama=''){if(!peerId
 async function stopLiveBroadcast(reason='admin_stop'){const id=activeBroadcastId;if(!id){stopAdminBroadcastMedia();return true;}for(const[key,call]of adminBroadcastCalls.entries())if(key.startsWith(`${id}:`)){try{call.close();}catch(_){}adminBroadcastCalls.delete(key);}const controlSocket=adminSocket?.connected?adminSocket:socket;if(controlSocket?.connected)controlSocket.emit('admin:broadcast',{type:'audio',action:'stop',mode:activeBroadcastMode||'test',broadcastId:id,targets:getBroadcastTargets()||[],reason},res=>console.log('[BROADCAST] STOP ACK',res));stopAdminBroadcastMedia();activeBroadcastId=null;activeBroadcastMode=null;updateBroadcastButtons();updateBroadcastStatus('⏹ Siaran berhenti');broadcastDebug.stage='idle';broadcastDebug.playState='stopped:'+reason;refreshDebugPanel();return true;}
 function updateBroadcastButtons(){const t=document.getElementById('btnBroadcastTest'),s=document.getElementById('btnBroadcastStart');if(t)t.textContent=activeBroadcastId&&activeBroadcastMode==='test'?'⏹ Stop Test':'🧪 Test';if(s)s.textContent=activeBroadcastId&&activeBroadcastMode==='scheduled'?'⏹ Stop Siaran':'▶️ Mulai Siaran';}
 async function testBroadcast(){if(activeBroadcastId&&activeBroadcastMode==='test')return stopLiveBroadcast('test_toggle_stop');if(activeBroadcastId)await stopLiveBroadcast('test_replaced');return startLiveBroadcast('test');}
-async function startBroadcast(){if(activeBroadcastId&&activeBroadcastMode==='scheduled')return stopLiveBroadcast('scheduled_manual_stop');if(!isBroadcastPeriodValid()){toast('❌ Jam siaran tidak valid. Pastikan Jam Mulai < Jam Selesai.','merah');return false;}if(!getBroadcastDays().length){toast('❌ Pilih minimal satu hari siaran.','merah');return false;}const scheduled=getBroadcastSchedule(),now=new Date();
-if(scheduled&&scheduled>now){
-  const scheduledDay=scheduled.getDay();
-  if(!getBroadcastDays().includes(scheduledDay)){toast('❌ Hari pada Jadwal tidak termasuk Hari Siaran yang dipilih.','merah');return false;}
-  scheduledBroadcastArmed=true;
-  if(scheduledBroadcastTimer)clearInterval(scheduledBroadcastTimer);
-  updateBroadcastStatus(`⏳ Menunggu jadwal ${scheduled.toLocaleString('id-ID')}`);
-  scheduledBroadcastTimer=setInterval(async()=>{
-    if(!scheduledBroadcastArmed)return;
-    const current=new Date();
-    if(current<scheduled)return;
-    scheduledBroadcastArmed=false;clearInterval(scheduledBroadcastTimer);scheduledBroadcastTimer=null;
-    if(!isBroadcastPeriodActive(current)){updateBroadcastStatus('⏰ Jadwal tercapai, tetapi di luar Hari/Jam Siaran.');return;}
-    await startLiveBroadcast('scheduled');
-  },500);
-  toast('⏳ Siaran dijadwalkan.','kuning');return true;
+async function startBroadcast(){
+    if(activeBroadcastId&&activeBroadcastMode==='scheduled') return stopLiveBroadcast('scheduled_manual_stop');
+    if(!isBroadcastPeriodValid()){
+        toast('❌ Jam siaran tidak valid. Pastikan Jam Mulai < Jam Selesai.','merah');
+        return false;
+    }
+    if(!getBroadcastDays().length){
+        toast('❌ Pilih minimal satu hari siaran.','merah');
+        return false;
+    }
+    const now=new Date();
+    if(!isBroadcastPeriodActive(now)){
+        toast('⏰ Sekarang di luar Hari/Jam Siaran.','kuning');
+        return false;
+    }
+    return startLiveBroadcast('scheduled');
 }
-if(!isBroadcastPeriodActive(now)){toast('⏰ Sekarang di luar Hari/Jam Siaran.','kuning');return false;}return startLiveBroadcast('scheduled');}
-setInterval(()=>{if(activeBroadcastId&&activeBroadcastMode==='scheduled'&&!isBroadcastPeriodActive(new Date()))stopLiveBroadcast('period_end');},1000);
+setInterval(()=>{
+    if(activeBroadcastId&&activeBroadcastMode==='scheduled'&&!isBroadcastPeriodActive(new Date())){
+        stopLiveBroadcast('period_end');
+    }
+},1000);
 
 function updateStats() {
     const grup = ambilData("daftarGrup");
