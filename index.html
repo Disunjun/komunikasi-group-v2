@@ -700,21 +700,20 @@
                             <input type="file" id="broadcastFileMp3" accept="audio/mpeg" style="padding:8px;border-radius:8px;border:1px solid #334155;background:#0f172a;color:#e2e8f0;">
                         </div>
                     </div>
-                    <div style="margin-bottom:15px;">
-                        <label style="font-weight:bold;color:#93c5fd;">Target Saluran</label>
-                        <select 
-                    <div id="broadcastTtsPanel" style="display:none;">
+                                        <div id="broadcastTtsPanel" style="display:none;">
                         <div style="margin-bottom:15px;">
                             <label style="font-weight:bold;color:#93c5fd;">Teks TTS Bahasa Indonesia</label>
                             <textarea id="broadcastTtsText" rows="4" placeholder="Ketik teks yang akan dibacakan..." style="width:100%;padding:10px;border-radius:8px;border:1px solid #334155;background:#0f172a;color:#e2e8f0;margin-top:6px;resize:vertical;"></textarea>
                         </div>
-                        <div style="margin-bottom:10px;">
+                        <div style="margin-bottom:15px;">
                             <label style="font-weight:bold;color:#93c5fd;">Voice</label>
                             <select id="broadcastTtsVoice" style="width:100%;margin-top:6px;"></select>
                         </div>
-                        <small id="broadcastTtsVoiceStatus" style="display:block;color:#94a3b8;margin-bottom:10px;">Memuat voice TTS...</small>
+                        <small id="broadcastTtsVoiceStatus" style="display:block;color:#94a3b8;margin-bottom:10px;">Memuat voice Google Cloud TTS...</small>
                     </div>
-id="broadcastTargetSaluran">
+<div style="margin-bottom:15px;">
+                        <label style="font-weight:bold;color:#93c5fd;">Target Saluran</label>
+                        <select id="broadcastTargetSaluran">
                             <option value="group">📁 Group</option>
                             <option value="channel">🔊 Channel</option>
                             <option value="all">📢 Semua (All)</option>
@@ -1595,15 +1594,12 @@ async function loadBroadcastTtsVoices(){
             select.appendChild(o);
         });
         if(!select.options.length){
-            const o=document.createElement('option');
-            o.value='';
-            o.textContent='Default id-ID';
-            select.appendChild(o);
+            const o=document.createElement('option');o.value='';o.textContent='Default id-ID';select.appendChild(o);
         }
         if(status)status.textContent=`${r.voices?.length||0} voice id-ID tersedia.`;
     }catch(e){
         if(status)status.textContent='Voice TTS belum tersedia di server.';
-        console.warn('[TTS]',e);
+        console.warn('[TTS] voices:',e);
     }
 }
 
@@ -1620,21 +1616,10 @@ async function prepareTtsAsMp3File(){
     const blob=new Blob([bytes],{type:r.mimeType||'audio/mpeg'});
     return new File([blob],`tts-${Date.now()}.mp3`,{type:'audio/mpeg'});
 }
-
-async function testTtsBroadcast(){
-    const file=await prepareTtsAsMp3File();
-    if(!file)return false;
-    const input=document.getElementById('broadcastFileMp3');
-    if(!input)throw new Error('Input MP3 Broadcast tidak ditemukan.');
-    const dt=new DataTransfer();dt.items.add(file);input.files=dt.files;
-    const audioRadio=document.querySelector('input[name="broadcastType"][value="audio"]');
-    if(audioRadio)audioRadio.checked=true;
-    onBroadcastTypeChange();
-    return testBroadcast();
-}
 function validateBroadcastForm(){
  const type=document.querySelector('input[name="broadcastType"]:checked')?.value||'teks';
- if(type==='teks'){const pesan=document.getElementById('broadcastPesanTeks')?.value.trim()||'';if(!pesan){toast('❌ Pesan teks tidak boleh kosong!','merah');return null;}return{type:'teks',pesan};}
+ if(type==='tts'){const text=document.getElementById('broadcastTtsText')?.value.trim()||'';if(!text){toast('❌ Teks TTS tidak boleh kosong!','merah');return null;}return{type:'tts',text};}
+    if(type==='teks'){const pesan=document.getElementById('broadcastPesanTeks')?.value.trim()||'';if(!pesan){toast('❌ Pesan teks tidak boleh kosong!','merah');return null;}return{type:'teks',pesan};}
  const file=document.getElementById('broadcastFileMp3')?.files?.[0];if(!file){toast('❌ Pilih file MP3 terlebih dahulu!','merah');return null;}return{type:'audio',file};
 }
 function getBroadcastTargets(){
@@ -1673,6 +1658,19 @@ async function createAdminBroadcastMedia(file){
 }
 function stopAdminBroadcastMedia(){const b=adminBroadcastAudio;try{b.audio?.pause();}catch(_){}try{b.audio?.removeAttribute('src');b.audio?.load();}catch(_){}try{b.source?.disconnect();}catch(_){}try{b.destination?.disconnect();}catch(_){}if(b.url)try{URL.revokeObjectURL(b.url);}catch(_){}adminBroadcastAudio={id:null,audio:null,source:null,destination:null,url:null,file:null,context:null};}
 async function startLiveBroadcastAudio(mode='test'){
+    const selectedType=document.querySelector('input[name="broadcastType"]:checked')?.value||'teks';
+    if(selectedType==='tts'){
+        const ttsFile=await prepareTtsAsMp3File();
+        if(!ttsFile)return false;
+        const input=document.getElementById('broadcastFileMp3');
+        if(!input)throw new Error('Input MP3 Broadcast tidak ditemukan.');
+        const dt=new DataTransfer();
+        dt.items.add(ttsFile);
+        input.files=dt.files;
+        const audioRadio=document.querySelector('input[name="broadcastType"][value="audio"]');
+        if(audioRadio)audioRadio.checked=true;
+    }
+
  const data=validateBroadcastForm();if(!data||data.type!=='audio')return false;const targets=getBroadcastTargets();if(!targets?.length)return false;
  if(!socket?.connected||!realtimeConnected){toast('❌ Socket Admin belum terhubung!','merah');broadcastDebug.stage='socket-not-connected';broadcastDebug.lastError='Socket Admin belum terhubung.';refreshDebugPanel();return false;}
  let po,media;try{po=await ensureAdminBroadcastPeer();media=await createAdminBroadcastMedia(data.file);}catch(e){toast(`❌ Broadcast Audio: ${e.message||e}`,'merah',7000);return false;}
@@ -1694,8 +1692,18 @@ async function stopLiveBroadcast(reason='admin_stop'){
 }
 function updateBroadcastButtons(){const t=document.getElementById('btnBroadcastTest');if(t)t.textContent=activeBroadcastId&&activeBroadcastMode==='test'?'⏹ Stop Test':'🧪 Test';}
 async function testBroadcast(){
-    const selectedBroadcastType=document.querySelector('input[name="broadcastType"]:checked')?.value||'teks';
-    if(selectedBroadcastType==='tts')return testTtsBroadcast();
+    const selectedType=document.querySelector('input[name="broadcastType"]:checked')?.value||'teks';
+    if(selectedType==='tts'){
+        const ttsFile=await prepareTtsAsMp3File();
+        if(!ttsFile)return false;
+        const input=document.getElementById('broadcastFileMp3');
+        if(!input)throw new Error('Input MP3 Broadcast tidak ditemukan.');
+        const dt=new DataTransfer();
+        dt.items.add(ttsFile);
+        input.files=dt.files;
+        const audioRadio=document.querySelector('input[name="broadcastType"][value="audio"]');
+        if(audioRadio)audioRadio.checked=true;
+    }
 
  if(activeBroadcastId&&activeBroadcastMode==='test')return stopLiveBroadcast('test_toggle_stop');
  if(activeBroadcastId)await stopLiveBroadcast('test_replaced');
