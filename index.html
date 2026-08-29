@@ -682,6 +682,10 @@
                                 <input type="radio" name="broadcastType" value="audio" onchange="onBroadcastTypeChange()">
                                 <span>🎵 File MP3</span>
                             </label>
+                            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+                                <input type="radio" name="broadcastType" value="tts" onchange="onBroadcastTypeChange()">
+                                <span>🗣️ TTS</span>
+                            </label>
                         </div>
                     </div>
                     <div id="broadcastTeksPanel">
@@ -698,7 +702,19 @@
                     </div>
                     <div style="margin-bottom:15px;">
                         <label style="font-weight:bold;color:#93c5fd;">Target Saluran</label>
-                        <select id="broadcastTargetSaluran">
+                        <select 
+                    <div id="broadcastTtsPanel" style="display:none;">
+                        <div style="margin-bottom:15px;">
+                            <label style="font-weight:bold;color:#93c5fd;">Teks TTS Bahasa Indonesia</label>
+                            <textarea id="broadcastTtsText" rows="4" placeholder="Ketik teks yang akan dibacakan..." style="width:100%;padding:10px;border-radius:8px;border:1px solid #334155;background:#0f172a;color:#e2e8f0;margin-top:6px;resize:vertical;"></textarea>
+                        </div>
+                        <div style="margin-bottom:10px;">
+                            <label style="font-weight:bold;color:#93c5fd;">Voice</label>
+                            <select id="broadcastTtsVoice" style="width:100%;margin-top:6px;"></select>
+                        </div>
+                        <small id="broadcastTtsVoiceStatus" style="display:block;color:#94a3b8;margin-bottom:10px;">Memuat voice TTS...</small>
+                    </div>
+id="broadcastTargetSaluran">
                             <option value="group">📁 Group</option>
                             <option value="channel">🔊 Channel</option>
                             <option value="all">📢 Semua (All)</option>
@@ -1550,14 +1566,72 @@ function initBroadcastForm() {
     });
 }
 
-function onBroadcastTypeChange() {
-    const isTeks = document.querySelector('input[name="broadcastType"]:checked').value === 'teks';
-    document.getElementById('broadcastTeksPanel').style.display = isTeks ? 'block' : 'none';
-    document.getElementById('broadcastAudioPanel').style.display = isTeks ? 'none' : 'block';
+function onBroadcastTypeChange(){
+    const type=document.querySelector('input[name="broadcastType"]:checked')?.value||'teks';
+    const teks=document.getElementById('broadcastTeksPanel');
+    const audio=document.getElementById('broadcastAudioPanel');
+    const tts=document.getElementById('broadcastTtsPanel');
+    if(teks)teks.style.display=type==='teks'?'block':'none';
+    if(audio)audio.style.display=type==='audio'?'block':'none';
+    if(tts)tts.style.display=type==='tts'?'block':'none';
+    if(type==='tts')loadBroadcastTtsVoices();
 }
 
 function onBroadcastPeriodeChange(){}
 
+
+async function loadBroadcastTtsVoices(){
+    const select=document.getElementById('broadcastTtsVoice');
+    const status=document.getElementById('broadcastTtsVoiceStatus');
+    if(!select)return;
+    try{
+        const r=await apiRequest('/api/tts/voices?languageCode=id-ID',{method:'GET'});
+        if(!r?.ok)throw new Error(r?.message||'Voice TTS gagal dimuat.');
+        select.innerHTML='';
+        (r.voices||[]).forEach(v=>{
+            const o=document.createElement('option');
+            o.value=v.name;
+            o.textContent=`${v.name}${v.ssmlGender?' — '+v.ssmlGender:''}`;
+            select.appendChild(o);
+        });
+        if(!select.options.length){
+            const o=document.createElement('option');
+            o.value='';
+            o.textContent='Default id-ID';
+            select.appendChild(o);
+        }
+        if(status)status.textContent=`${r.voices?.length||0} voice id-ID tersedia.`;
+    }catch(e){
+        if(status)status.textContent='Voice TTS belum tersedia di server.';
+        console.warn('[TTS]',e);
+    }
+}
+
+async function prepareTtsAsMp3File(){
+    const text=(document.getElementById('broadcastTtsText')?.value||'').trim();
+    if(!text){toast('❌ Teks TTS tidak boleh kosong!','merah');return null;}
+    const voice=document.getElementById('broadcastTtsVoice')?.value||'';
+    const r=await apiRequest('/api/tts/synthesize',{
+        method:'POST',
+        body:JSON.stringify({text,languageCode:'id-ID',voice,audioEncoding:'MP3'})
+    });
+    if(!r?.ok||!r.audioBase64)throw new Error(r?.message||'TTS tidak menghasilkan audio.');
+    const bytes=Uint8Array.from(atob(r.audioBase64),c=>c.charCodeAt(0));
+    const blob=new Blob([bytes],{type:r.mimeType||'audio/mpeg'});
+    return new File([blob],`tts-${Date.now()}.mp3`,{type:'audio/mpeg'});
+}
+
+async function testTtsBroadcast(){
+    const file=await prepareTtsAsMp3File();
+    if(!file)return false;
+    const input=document.getElementById('broadcastFileMp3');
+    if(!input)throw new Error('Input MP3 Broadcast tidak ditemukan.');
+    const dt=new DataTransfer();dt.items.add(file);input.files=dt.files;
+    const audioRadio=document.querySelector('input[name="broadcastType"][value="audio"]');
+    if(audioRadio)audioRadio.checked=true;
+    onBroadcastTypeChange();
+    return testBroadcast();
+}
 function validateBroadcastForm(){
  const type=document.querySelector('input[name="broadcastType"]:checked')?.value||'teks';
  if(type==='teks'){const pesan=document.getElementById('broadcastPesanTeks')?.value.trim()||'';if(!pesan){toast('❌ Pesan teks tidak boleh kosong!','merah');return null;}return{type:'teks',pesan};}
@@ -1620,6 +1694,9 @@ async function stopLiveBroadcast(reason='admin_stop'){
 }
 function updateBroadcastButtons(){const t=document.getElementById('btnBroadcastTest');if(t)t.textContent=activeBroadcastId&&activeBroadcastMode==='test'?'⏹ Stop Test':'🧪 Test';}
 async function testBroadcast(){
+    const selectedBroadcastType=document.querySelector('input[name="broadcastType"]:checked')?.value||'teks';
+    if(selectedBroadcastType==='tts')return testTtsBroadcast();
+
  if(activeBroadcastId&&activeBroadcastMode==='test')return stopLiveBroadcast('test_toggle_stop');
  if(activeBroadcastId)await stopLiveBroadcast('test_replaced');
  const data=validateBroadcastForm();if(!data)return false;const targets=getBroadcastTargets();if(!targets?.length)return false;
