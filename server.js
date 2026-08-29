@@ -6,13 +6,18 @@ import crypto from 'crypto';
 import { promisify } from 'util';
 import { Server } from 'socket.io';
 import pg from 'pg';
-import textToSpeech from '@google-cloud/text-to-speech';
+import { spawn } from 'child_process';
+import { mkdtemp, readFile, rm } from 'fs/promises';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 
 const { Pool } = pg;
-const ttsClient = new textToSpeech.TextToSpeechClient();
-const TTS_DEFAULT_LANGUAGE = process.env.TTS_DEFAULT_LANGUAGE || 'id-ID';
-const TTS_DEFAULT_VOICE = process.env.TTS_DEFAULT_VOICE || '';
-const TTS_MAX_CHARS = Math.max(100, Math.min(5000, Number(process.env.TTS_MAX_CHARS || 3000)));
+const TTS_DEFAULT_LANGUAGE = 'id-ID';
+const PIPER_PYTHON = String(process.env.PIPER_PYTHON || 'python').trim();
+const PIPER_DATA_DIR = path.resolve(process.env.PIPER_DATA_DIR || './piper-voices');
+const PIPER_DEFAULT_VOICE = String(process.env.PIPER_VOICE || 'id_ID-news_tts-medium').trim();
+const PIPER_MAX_CHARS = Math.max(100, Math.min(3000, Number(process.env.PIPER_MAX_CHARS || 3000)));
 const scryptAsync = promisify(crypto.scrypt);
 const app = express();
 const server = http.createServer(app);
@@ -292,39 +297,110 @@ app.post('/api/admin/logout', requireAdmin, async (req,res) => {
 });
 
 
-// ===== GOOGLE CLOUD TTS V1 =====
-app.get('/api/tts/voices', requireAdmin, async (req,res)=>{
+
+// ===== LOCAL PIPER TTS V1 =====
+function piperVoiceModelExists(voiceName) {
+  const safe = String(voiceName || '').trim();
+  if (!/^[A-Za-z0-9_.-]+$/.test(safe)) return false;
+  return fs.existsSync(path.join(PIPER_DATA_DIR, `${safe}.onnx`))
+      && fs.existsSync(path.join(PIPER_DATA_DIR, `${safe}.onnx.json`));
+}
+
+function runPiperToWav(text, voiceName) {
+  return new Promise(async (resolve, reject) => {
+    let tempDir = null;
+    let outputFile = null;
+    let child = null;
+    let stderr = '';
+    let finished = false;
+    const timeoutMs = Math.max(5000, Math.min(60000, Number(process.env.PIPER_TIMEOUT_MS || 30000)));
+
+    const cleanup = async () => {
+      if (tempDir) {
+        try { await rm(tempDir, { recursive: true, force: true }); } catch (_) {}
+      }
+    };
+
+    try {
+      if (!piperVoiceModelExists(voiceName)) throw new Error(`Voice Piper tidak ditemukan: ${voiceName}`);
+
+      tempDir = await mkdtemp(path.join(os.tmpdir(), 'komgrup-piper-'));
+      outputFile = path.join(tempDir, 'speech.wav');
+
+      child = spawn(PIPER_PYTHON, [
+        '-m', 'piper',
+        '-m', voiceName,
+        '--data-dir', PIPER_DATA_DIR,
+        '-f', outputFile,
+        '--',
+        text
+      ], { windowsHide:true, shell:false, stdio:['ignore','ignore','pipe'] });
+
+      const timer=setTimeout(()=>{
+        try{child.kill();}catch(_){}
+        if(!finished){finished=true;cleanup().finally(()=>reject(new Error('Piper TTS timeout.')));}
+      },timeoutMs);
+
+      child.stderr?.on('data',chunk=>{stderr+=String(chunk);});
+      child.on('error',async err=>{
+        clearTimeout(timer);
+        if(finished)return;
+        finished=true;
+        await cleanup();
+        reject(err?.code==='ENOENT'
+          ? new Error(`Python/Piper tidak ditemukan. PIPER_PYTHON=${PIPER_PYTHON}`)
+          : err);
+      });
+      child.on('close',async code=>{
+        clearTimeout(timer);
+        if(finished)return;
+        finished=true;
+        try{
+          if(code!==0)throw new Error(stderr.trim()||`Piper exit code ${code}`);
+          const wav=await readFile(outputFile);
+          if(!wav.length)throw new Error('Piper menghasilkan WAV kosong.');
+          await cleanup();
+          resolve(wav);
+        }catch(err){await cleanup();reject(err);}
+      });
+    }catch(err){await cleanup();reject(err);}
+  });
+}
+
+app.get('/api/tts/voices', requireAdmin, async (_req,res)=>{
   try{
-    const languageCode=String(req.query?.languageCode||TTS_DEFAULT_LANGUAGE).trim()||TTS_DEFAULT_LANGUAGE;
-    const [result]=await ttsClient.listVoices({languageCode});
-    res.json({ok:true,languageCode,voices:(result.voices||[]).map(v=>({
-      name:v.name,languageCodes:v.languageCodes||[],ssmlGender:v.ssmlGender||null,
-      naturalSampleRateHertz:v.naturalSampleRateHertz||null
-    }))});
+    const ready=piperVoiceModelExists(PIPER_DEFAULT_VOICE);
+    res.json({
+      ok:true,
+      provider:'piper-local',
+      languageCode:TTS_DEFAULT_LANGUAGE,
+      voices:ready?[{
+        name:PIPER_DEFAULT_VOICE,
+        languageCodes:[TTS_DEFAULT_LANGUAGE],
+        ssmlGender:'MALE',
+        local:true
+      }]:[],
+      ready,
+      message:ready?'Piper TTS siap.':`Model Piper belum ditemukan di ${PIPER_DATA_DIR}.`
+    });
   }catch(e){
-    console.error('[TTS] LIST VOICES ERROR:',e);
-    res.status(502).json({ok:false,code:'TTS_PROVIDER_ERROR',message:'Gagal membaca voice Google Cloud TTS.'});
+    console.error('[PIPER] VOICES ERROR:',e);
+    res.status(500).json({ok:false,code:'PIPER_NOT_READY',message:e.message||'Piper TTS belum siap.'});
   }
 });
 
 app.post('/api/tts/synthesize', requireAdmin, async (req,res)=>{
   try{
     const text=String(req.body?.text||'').trim();
-    const languageCode=String(req.body?.languageCode||TTS_DEFAULT_LANGUAGE).trim()||TTS_DEFAULT_LANGUAGE;
-    const voiceName=String(req.body?.voice||TTS_DEFAULT_VOICE).trim();
+    const voiceName=String(req.body?.voice||PIPER_DEFAULT_VOICE).trim()||PIPER_DEFAULT_VOICE;
     if(!text)return res.status(400).json({ok:false,code:'TTS_TEXT_EMPTY',message:'Teks TTS kosong.'});
-    if(text.length>TTS_MAX_CHARS)return res.status(400).json({ok:false,code:'TTS_TEXT_TOO_LONG',message:`Teks TTS maksimal ${TTS_MAX_CHARS} karakter.`});
-    const [response]=await ttsClient.synthesizeSpeech({
-      input:{text},
-      voice:voiceName?{languageCode,name:voiceName}:{languageCode},
-      audioConfig:{audioEncoding:'MP3'}
-    });
-    if(!response?.audioContent)throw new Error('Google Cloud TTS tidak mengembalikan audio.');
-    const audioBuffer=Buffer.isBuffer(response.audioContent)?response.audioContent:Buffer.from(response.audioContent);
-    res.json({ok:true,mimeType:'audio/mpeg',audioEncoding:'MP3',audioBase64:audioBuffer.toString('base64')});
+    if(text.length>PIPER_MAX_CHARS)return res.status(400).json({ok:false,code:'TTS_TEXT_TOO_LONG',message:`Teks TTS maksimal ${PIPER_MAX_CHARS} karakter.`});
+    if(!piperVoiceModelExists(voiceName))return res.status(503).json({ok:false,code:'PIPER_MODEL_MISSING',message:`Model Piper '${voiceName}' belum tersedia di server.`});
+    const wav=await runPiperToWav(text,voiceName);
+    res.json({ok:true,provider:'piper-local',mimeType:'audio/wav',audioEncoding:'WAV',audioBase64:wav.toString('base64')});
   }catch(e){
-    console.error('[TTS] SYNTHESIZE ERROR:',e);
-    res.status(502).json({ok:false,code:'TTS_PROVIDER_ERROR',message:'Gagal menghasilkan audio TTS.'});
+    console.error('[PIPER] SYNTHESIZE ERROR:',e);
+    res.status(502).json({ok:false,code:'PIPER_SYNTHESIS_ERROR',message:e.message||'Gagal menghasilkan audio Piper TTS.'});
   }
 });
 
