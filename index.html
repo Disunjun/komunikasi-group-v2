@@ -717,30 +717,25 @@
                         </select>
                     </div>
                     <div style="margin-bottom:15px;">
-                        <label style="font-weight:bold;color:#93c5fd;">Hari Siaran</label>
-                        <div class="baris" style="flex-wrap:wrap;gap:8px;">
-                            <label><input type="checkbox" class="broadcast-day" value="1"> Senin</label>
-                            <label><input type="checkbox" class="broadcast-day" value="2"> Selasa</label>
-                            <label><input type="checkbox" class="broadcast-day" value="3"> Rabu</label>
-                            <label><input type="checkbox" class="broadcast-day" value="4"> Kamis</label>
-                            <label><input type="checkbox" class="broadcast-day" value="5"> Jumat</label>
-                            <label><input type="checkbox" class="broadcast-day" value="6"> Sabtu</label>
-                            <label><input type="checkbox" class="broadcast-day" value="0"> Minggu</label>
-                        </div>
-                        <div style="font-size:12px;color:#94a3b8;margin-top:6px;">
-                            Jika tidak ada hari dicentang, otomatis berlaku setiap hari.
+                        <label style="font-weight:bold;color:#93c5fd;">Periode Siaran</label>
+                        <div class="baris">
+                            <select id="broadcastPeriode" onchange="onBroadcastPeriodeChange()">
+                                <option value="hari">📅 Hari</option>
+                                <option value="jam">⏰ Jam</option>
+                            </select>
+                            <input type="number" id="broadcastDurasi" placeholder="Durasi" min="1" value="1" style="width:120px;">
                         </div>
                     </div>
                     <div style="margin-bottom:15px;">
-                        <label style="font-weight:bold;color:#93c5fd;">Jam Siaran</label>
+                        <label style="font-weight:bold;color:#93c5fd;">Jadwal</label>
                         <div class="baris">
-                            <input type="time" id="broadcastJam" value="08:00" style="width:140px;">
-                            <span style="font-size:12px;color:#94a3b8;">MP3 diputar 1× saat waktu tercapai.</span>
-                            <button class="btn btn-kuning" id="broadcastTestButton" onclick="testBroadcast()">🧪 Test</button>
+                            <input type="datetime-local" id="broadcastJadwal" style="flex:1;min-width:200px;">
+                            <button class="btn btn-kuning" onclick="testBroadcast()">🧪 Test</button>
+                            <button class="btn btn-hijau" onclick="startBroadcast()">▶️ Mulai Siaran</button>
                         </div>
                     </div>
                     <div id="broadcastStatus" class="status status-kuning" style="display:none;">
-                        <span id="broadcastStatusText">Menunggu waktu siaran...</span>
+                        <span id="broadcastStatusText">Menunggu jadwal...</span>
                     </div>
                 </div>
             </div>
@@ -1557,53 +1552,39 @@ function onBroadcastTypeChange() {
     document.getElementById('broadcastAudioPanel').style.display = isTeks ? 'none' : 'block';
 }
 
-function getBroadcastDays() {
-    return [...document.querySelectorAll('.broadcast-day:checked')].map(el => Number(el.value));
-}
-
-function getBroadcastTime() {
-    return document.getElementById('broadcastJam')?.value || '';
-}
-
-function broadcastScheduleAllowsNow(date = new Date()) {
-    const days = getBroadcastDays();
-    if(days.length > 0 && !days.includes(date.getDay())) return false;
-
-    const hhmm = getBroadcastTime();
-    if(!/^\d{2}:\d{2}$/.test(hhmm)) return false;
-
-    const [hh, mm] = hhmm.split(':').map(Number);
-    return date.getHours() === hh && date.getMinutes() === mm;
-}
+function onBroadcastPeriodeChange() {}
 
 function validateBroadcastForm() {
     const broadcastType = document.querySelector('input[name="broadcastType"]:checked').value;
-
+    
     if(broadcastType === 'teks') {
         const pesan = document.getElementById('broadcastPesanTeks').value.trim();
         if(!pesan) {
             toast('❌ Pesan teks tidak boleh kosong!', 'merah');
             return null;
         }
-        return { type:'teks', pesan };
+        return { type: 'teks', pesan };
+    } else {
+        const file = document.getElementById('broadcastFileMp3').files[0];
+        if(!file) {
+            toast('❌ Pilih file MP3 terlebih dahulu!', 'merah');
+            return null;
+        }
+        return { type: 'audio', file };
     }
-
-    const file = document.getElementById('broadcastFileMp3').files[0];
-    if(!file) {
-        toast('❌ Pilih file MP3 terlebih dahulu!', 'merah');
-        return null;
-    }
-    return { type:'audio', file };
 }
 
 function getBroadcastTargets() {
     const targetSaluran = document.getElementById('broadcastTargetSaluran').value;
     const targets = [];
-
+    
     if(targetSaluran === 'all') {
         centralGroups.forEach(g => {
-            if(Array.isArray(g.channel))
-                g.channel.forEach(c => targets.push({grup:g.nama, channel:c.nama}));
+            if(Array.isArray(g.channel)) {
+                g.channel.forEach(c => {
+                    targets.push({ grup: g.nama, channel: c.nama });
+                });
+            }
         });
     } else if(targetSaluran === 'group') {
         const groupIdx = document.getElementById('broadcastGroupSelect').value;
@@ -1612,153 +1593,78 @@ function getBroadcastTargets() {
             return null;
         }
         const grup = centralGroups[groupIdx];
-        if(grup && Array.isArray(grup.channel))
-            grup.channel.forEach(c => targets.push({grup:grup.nama, channel:c.nama}));
+        if(grup && Array.isArray(grup.channel)) {
+            grup.channel.forEach(c => {
+                targets.push({ grup: grup.nama, channel: c.nama });
+            });
+        }
     } else if(targetSaluran === 'channel') {
         const channelNama = document.getElementById('broadcastChannelSelect').value;
         if(!channelNama) {
             toast('❌ Pilih Channel terlebih dahulu!', 'merah');
             return null;
         }
-        for(const g of centralGroups) {
-            for(const c of (g.channel || [])) {
+        for(let g of centralGroups) {
+            for(let c of (g.channel || [])) {
                 if(c.nama === channelNama) {
-                    targets.push({grup:g.nama, channel:c.nama});
-                    break;
+                    targets.push({ grup: g.nama, channel: c.nama });
+                    return targets;
                 }
             }
-            if(targets.length) break;
         }
     }
-
-    return targets.length ? targets : null;
+    
+    return targets.length > 0 ? targets : null;
 }
 
-let broadcastTestAudioActive = false;
-let broadcastScheduleTimer = null;
-let broadcastLastScheduledKey = '';
-
-function stopBroadcastTestAudio() {
-    broadcastTestAudioActive = false;
-    if(typeof window.stopAllBroadcastAudio === 'function') {
-        try { window.stopAllBroadcastAudio(); } catch(e) {}
-    }
-    const btn = document.getElementById('broadcastTestButton');
-    if(btn) btn.textContent = '🧪 Test';
-}
-
-function emitBroadcast(data, targets, isTest, label) {
-    const targetSocket = adminSocket || socket;
-    if(!targetSocket || !targetSocket.connected) {
-        toast('❌ Socket Admin belum terhubung!', 'merah');
-        return Promise.resolve(false);
-    }
-
-    return new Promise(resolve => {
-        const payload = {
-            type:data.type,
-            pesan:data.pesan || '',
-            targets,
-            isTest:!!isTest,
-            broadcastMode:isTest ? 'test' : 'scheduled'
-        };
-
-        if(data.type === 'audio') {
-            const reader = new FileReader();
-            reader.onload = e => {
-                payload.fileName = data.file.name;
-                payload.audioData = e.target.result;
-                targetSocket.emit('admin:broadcast', payload, res => {
-                    if(res?.ok) {
-                        toast(`✅ ${label}`, 'hijau');
-                        resolve(true);
-                    } else {
-                        toast(`❌ Gagal: ${res?.message || 'Error'}`, 'merah');
-                        resolve(false);
-                    }
-                });
-            };
-            reader.onerror = () => {
-                toast('❌ File MP3 gagal dibaca.', 'merah');
-                resolve(false);
-            };
-            reader.readAsArrayBuffer(data.file);
-        } else {
-            targetSocket.emit('admin:broadcast', payload, res => {
-                if(res?.ok) {
-                    toast(`✅ ${label}`, 'hijau');
-                    resolve(true);
-                } else {
-                    toast(`❌ Gagal: ${res?.message || 'Error'}`, 'merah');
-                    resolve(false);
-                }
-            });
-        }
-    });
-}
-
-async function testBroadcast() {
+function testBroadcast() {
     const data = validateBroadcastForm();
     if(!data) return;
-
+    
     const targets = getBroadcastTargets();
     if(!targets) {
         toast('❌ Tidak ada channel target!', 'merah');
         return;
     }
-
-    // TEST: manual toggle for audio; ignores day and time.
-    if(data.type === 'audio' && broadcastTestAudioActive) {
-        stopBroadcastTestAudio();
-        toast('⏹️ Test Audio dihentikan.', 'kuning');
+    
+    if(!socket || !socket.connected) {
+        toast('❌ Socket belum terhubung!', 'merah');
         return;
     }
-
-    const ok = await emitBroadcast(
-        data,
-        targets,
-        true,
-        data.type === 'teks' ? 'Test Teks terkirim!' : 'Test Audio terkirim!'
-    );
-
-    if(ok && data.type === 'audio') {
-        broadcastTestAudioActive = true;
-        const btn = document.getElementById('broadcastTestButton');
-        if(btn) btn.textContent = '⏹️ Stop Test';
+    
+    // Gunakan socket Admin utama yang sudah authenticated.
+    const targetSocket = socket;
+    
+    if(data.type === 'teks') {
+        targetSocket.emit('admin:broadcast', {
+            type: 'teks',
+            pesan: data.pesan,
+            targets: targets,
+            isTest: true
+        }, (res) => {
+            if(res?.ok) toast(`✅ Test Teks terkirim!`, 'hijau');
+            else toast(`❌ Gagal: ${res?.message || 'Error'}`, 'merah');
+        });
+    } else {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            targetSocket.emit('admin:broadcast', {
+                type: 'audio',
+                fileName: data.file.name,
+                audioData: e.target.result,
+                targets: targets,
+                isTest: true
+            }, (res) => {
+                if(res?.ok) toast(`✅ Test Audio terkirim!`, 'hijau');
+                else toast(`❌ Gagal: ${res?.message || 'Error'}`, 'merah');
+            });
+        };
+        reader.readAsArrayBuffer(data.file);
     }
 }
 
-// Automatic one-shot scheduler. There is intentionally no "Mulai Siaran" button.
-// At the selected minute, MP3 is sent once. The MP3 itself is never looped.
-function startBroadcastScheduleWatcher() {
-    if(broadcastScheduleTimer) clearInterval(broadcastScheduleTimer);
-
-    broadcastScheduleTimer = setInterval(async () => {
-        const now = new Date();
-        if(!broadcastScheduleAllowsNow(now)) return;
-
-        const key = `${now.getFullYear()}-${now.getMonth()+1}-${now.getDate()}-${now.getHours()}-${now.getMinutes()}`;
-        if(broadcastLastScheduledKey === key) return;
-        broadcastLastScheduledKey = key;
-
-        const data = validateBroadcastForm();
-        if(!data) return;
-
-        const targets = getBroadcastTargets();
-        if(!targets) return;
-
-        await emitBroadcast(
-            data,
-            targets,
-            false,
-            data.type === 'teks' ? 'Siaran Teks otomatis terkirim!' : 'Siaran MP3 otomatis terkirim!'
-        );
-    }, 1000);
-}
-
-if(!window.__broadcastScheduleWatcherStarted) {
-    window.__broadcastScheduleWatcherStarted = true;
-    setTimeout(startBroadcastScheduleWatcher, 1000);
+function startBroadcast() {
+    testBroadcast();
 }
 
 function updateStats() {
@@ -2532,6 +2438,7 @@ function initAdminRealtimeSocket() {
     }
 
     socket = io(REALTIME_SERVER_URL, {
+        auth: { adminToken: adminToken },
         transports:["websocket","polling"],
         reconnection:true,
         reconnectionAttempts:Infinity,
@@ -2542,6 +2449,7 @@ function initAdminRealtimeSocket() {
 
     socket.on("connect", async () => {
         realtimeConnected = true;
+        socket.auth = { adminToken };
         console.log("[ADMIN SOCKET] CONNECTED:", socket.id);
         try {
             await loadServerAdminStats();
@@ -2675,51 +2583,17 @@ function initRealtimeSocket() {
     socket.on("admin:kick", () => { toast("Anda telah di-kick oleh admin!", "merah", 5000); keluarChannel(); });
     socket.on("floor:event", receiveFloorState);
     
-    let broadcastAudioPlayers = new Set();
-
-window.stopAllBroadcastAudio = function() {
-    for(const audio of broadcastAudioPlayers) {
-        try {
-            audio.pause();
-            audio.currentTime = 0;
-            audio.removeAttribute('src');
-            audio.load();
-        } catch(e) {}
-    }
-    broadcastAudioPlayers.clear();
-};
-
-socket.on("server:broadcast", (data) => {
-        const type = String(data?.type || '').toLowerCase();
-
-        if(type === 'teks' || type === 'text') {
-            const pesan = String(data?.pesan || '').trim();
-            if(!pesan) return;
-            toast(`📢 BROADCAST: ${pesan}`, 'biru', 15000);
-            try { tambahPesan('[BROADCAST]', pesan); } catch(e) {}
-            return;
-        }
-
-        if(type === 'audio' && data.audioData) {
+    socket.on("server:broadcast", (data) => {
+        if(data.type === 'teks') {
+            toast(`📢 BROADCAST: ${data.pesan}`, 'biru', 15000);
+            tambahPesan('[BROADCAST]', data.pesan);
+        } else if(data.type === 'audio' && data.audioData) {
             try {
-                const blob = new Blob([data.audioData], {type:'audio/mpeg'});
+                const blob = new Blob([data.audioData], { type: 'audio/mpeg' });
                 const url = URL.createObjectURL(blob);
                 const audio = new Audio(url);
-                audio.autoplay = true;
-                audio.loop = false;
-                audio.volume = 1;
-                broadcastAudioPlayers.add(audio);
-
-                const cleanup = () => {
-                    broadcastAudioPlayers.delete(audio);
-                    URL.revokeObjectURL(url);
-                };
-                audio.addEventListener('ended', cleanup, {once:true});
-                audio.addEventListener('error', cleanup, {once:true});
-
-                audio.play()
-                    .then(() => toast(`📢 SIARAN AUDIO: ${data.fileName || 'broadcast.mp3'}`, 'biru', 10000))
-                    .catch(e => console.warn('[BROADCAST] Autoplay blocked:', e));
+                audio.play().catch(e => console.warn('[BROADCAST] Autoplay blocked:', e));
+                toast(`📢 SIARAN AUDIO: ${data.fileName || 'broadcast.mp3'}`, 'biru', 10000);
             } catch(err) {
                 console.error('[BROADCAST] Audio play error:', err);
                 toast('❌ Gagal memutar audio broadcast', 'merah');
