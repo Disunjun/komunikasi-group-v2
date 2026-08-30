@@ -18,6 +18,7 @@ const PIPER_PYTHON = String(process.env.PIPER_PYTHON || 'python').trim();
 const PIPER_DATA_DIR = path.resolve(process.env.PIPER_DATA_DIR || './piper-voices');
 const PIPER_DEFAULT_VOICE = String(process.env.PIPER_VOICE || 'id_ID-news_tts-medium').trim();
 const PIPER_MAX_CHARS = Math.max(100, Math.min(3000, Number(process.env.PIPER_MAX_CHARS || 3000)));
+const PIPER_LENGTH_SCALE = Math.max(0.8, Math.min(2.0, Number(process.env.PIPER_LENGTH_SCALE || 1.5)));
 const scryptAsync = promisify(crypto.scrypt);
 const app = express();
 const server = http.createServer(app);
